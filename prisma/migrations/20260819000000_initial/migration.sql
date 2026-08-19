@@ -1,0 +1,17 @@
+CREATE TABLE "GuildSettings" ("guildId" TEXT PRIMARY KEY,"defaultLanguage" TEXT NOT NULL DEFAULT 'en',"defaultStyle" TEXT NOT NULL DEFAULT 'S5',"reactionMode" TEXT NOT NULL DEFAULT 'dm',"botLocale" TEXT NOT NULL DEFAULT 'en',"commandPermission" JSONB NOT NULL DEFAULT '{"mode":"everyone"}',"reactionPermission" JSONB NOT NULL DEFAULT '{"mode":"everyone"}',"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,"updatedAt" TIMESTAMP(3) NOT NULL);
+CREATE TABLE "TranslationGroup" ("id" TEXT PRIMARY KEY,"guildId" TEXT NOT NULL,"name" TEXT NOT NULL,"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE UNIQUE INDEX "TranslationGroup_guildId_name_key" ON "TranslationGroup"("guildId","name");
+CREATE TABLE "ChannelSettings" ("guildId" TEXT NOT NULL,"channelId" TEXT PRIMARY KEY,"language" TEXT,"autoLanguages" TEXT[],"autoEnabled" BOOLEAN NOT NULL DEFAULT false,"style" TEXT,"botsMode" TEXT NOT NULL DEFAULT 'disabled',"ignored" BOOLEAN NOT NULL DEFAULT false,"groupId" TEXT REFERENCES "TranslationGroup"("id") ON DELETE SET NULL ON UPDATE CASCADE);
+CREATE INDEX "ChannelSettings_guildId_idx" ON "ChannelSettings"("guildId");
+CREATE TABLE "UserRule" ("guildId" TEXT NOT NULL,"userId" TEXT NOT NULL,"autoLanguage" TEXT,"banned" BOOLEAN NOT NULL DEFAULT false,PRIMARY KEY("guildId","userId"));
+CREATE TABLE "AllowedBot" ("guildId" TEXT NOT NULL,"botId" TEXT NOT NULL,PRIMARY KEY("guildId","botId"));
+CREATE TABLE "AllowedWebhook" ("guildId" TEXT NOT NULL,"webhookId" TEXT NOT NULL,PRIMARY KEY("guildId","webhookId"));
+CREATE TABLE "ManagedWebhook" ("channelId" TEXT PRIMARY KEY,"guildId" TEXT NOT NULL,"webhookId" TEXT NOT NULL UNIQUE,"token" TEXT NOT NULL,"updatedAt" TIMESTAMP(3) NOT NULL);
+CREATE TABLE "IgnoreTerm" ("id" TEXT PRIMARY KEY,"guildId" TEXT NOT NULL,"term" TEXT NOT NULL,"mode" TEXT NOT NULL DEFAULT 'exact',"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "IgnoreTerm_guildId_idx" ON "IgnoreTerm"("guildId");
+CREATE TABLE "TranslatedMessage" ("id" TEXT PRIMARY KEY,"guildId" TEXT NOT NULL,"originalChannelId" TEXT NOT NULL,"originalMessageId" TEXT NOT NULL,"translatedChannelId" TEXT NOT NULL,"translatedMessageId" TEXT NOT NULL UNIQUE,"targetLanguage" TEXT NOT NULL,"provider" TEXT NOT NULL,"partIndex" INTEGER NOT NULL DEFAULT 0,"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "TranslatedMessage_originalMessageId_idx" ON "TranslatedMessage"("originalMessageId");
+CREATE TABLE "TranslationCache" ("key" TEXT PRIMARY KEY,"sourceHash" TEXT NOT NULL,"sourceLanguage" TEXT NOT NULL,"targetLanguage" TEXT NOT NULL,"translatedText" TEXT NOT NULL,"provider" TEXT NOT NULL,"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,"expiresAt" TIMESTAMP(3) NOT NULL);
+CREATE INDEX "TranslationCache_expiresAt_idx" ON "TranslationCache"("expiresAt");
+CREATE TABLE "TranslationUsage" ("id" TEXT PRIMARY KEY,"guildId" TEXT,"provider" TEXT NOT NULL,"sourceLanguage" TEXT,"targetLanguage" TEXT NOT NULL,"success" BOOLEAN NOT NULL,"cached" BOOLEAN NOT NULL DEFAULT false,"latencyMs" INTEGER NOT NULL,"characters" INTEGER NOT NULL,"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "TranslationUsage_guildId_createdAt_idx" ON "TranslationUsage"("guildId","createdAt");

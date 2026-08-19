@@ -1,0 +1,2 @@
+import {describe,it,expect} from 'vitest';import {matchesTerm,stripIgnoreMarker} from '../src/services/discord/ignore-rules.js';
+describe('ignore rules',()=>{it.each(['--i','--ignore','--notranslate'])('recognizes %s',marker=>expect(stripIgnoreMarker(`hello ${marker}`)).toEqual({ignored:true,text:'hello'}));it('matches configured modes',()=>{expect(matchesTerm('OpenAI API','openai api','case-insensitive')).toBe(true);expect(matchesTerm('ChatGPT pro','ChatGPT','prefix')).toBe(true);expect(matchesTerm('use VS Code','VS Code','contains')).toBe(true);});});

@@ -1,0 +1,1 @@
+import {describe,it,expect} from 'vitest';import {splitMessage} from '../src/utils/message-splitter.js';describe('message splitter',()=>{it('keeps all content and respects limits',()=>{const input=Array(100).fill('multilingual conversation').join('\n');const parts=splitMessage(input,100);expect(parts.every(x=>x.length<=100)).toBe(true);expect(parts.join('')).toBe(input);});});

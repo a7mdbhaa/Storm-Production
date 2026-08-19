@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model GuildSettings {
+  guildId            String   @id
+  defaultLanguage    String   @default("en")
+  defaultStyle       String   @default("S9")
+  reactionMode       String   @default("dm")
+  botLocale          String   @default("en")
+  commandPermission  Json     @default("{\"mode\":\"everyone\"}")
+  reactionPermission Json     @default("{\"mode\":\"everyone\"}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model ChannelSettings {
+  guildId       String
+  channelId     String            @id
+  language      String?
+  autoLanguages String[]
+  autoEnabled   Boolean           @default(false)
+  style         String?
+  botsMode      String            @default("disabled")
+  ignored       Boolean           @default(false)
+  groupId       String?
+  group         TranslationGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([guildId])
+}
+
+model TranslationGroup {
+  id        String            @id @default(cuid())
+  guildId   String
+  name      String
+  channels  ChannelSettings[]
+  createdAt DateTime          @default(now())
+
+  @@unique([guildId, name])
+}
+
+model UserRule {
+  guildId      String
+  userId       String
+  autoLanguage String?
+  banned       Boolean @default(false)
+
+  @@id([guildId, userId])
+}
+
+model AllowedBot {
+  guildId String
+  botId   String
+
+  @@id([guildId, botId])
+}
+
+model AllowedWebhook {
+  guildId   String
+  webhookId String
+
+  @@id([guildId, webhookId])
+}
+
+model ManagedWebhook {
+  channelId String   @id
+  guildId   String
+  webhookId String   @unique
+  token     String
+  updatedAt DateTime @updatedAt
+}
+
+model IgnoreTerm {
+  id        String   @id @default(cuid())
+  guildId   String
+  term      String
+  mode      String   @default("exact")
+  createdAt DateTime @default(now())
+
+  @@index([guildId])
+}
+
+model TranslatedMessage {
+  id                  String   @id @default(cuid())
+  guildId             String
+  originalChannelId   String
+  originalMessageId   String
+  translatedChannelId String
+  translatedMessageId String
+  targetLanguage      String
+  provider            String
+  partIndex           Int      @default(0)
+  createdAt           DateTime @default(now())
+
+  @@unique([translatedMessageId])
+  @@index([originalMessageId])
+}
+
+model TranslationCache {
+  key            String   @id
+  sourceHash     String
+  sourceLanguage String
+  targetLanguage String
+  translatedText String   @db.Text
+  provider       String
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@index([expiresAt])
+}
+
+model TranslationUsage {
+  id             String   @id @default(cuid())
+  guildId        String?
+  provider       String
+  sourceLanguage String?
+  targetLanguage String
+  success        Boolean
+  cached         Boolean  @default(false)
+  latencyMs      Int
+  characters     Int
+  createdAt      DateTime @default(now())
+
+  @@index([guildId, createdAt])
+}
+
+model TranslationBatchUsage {
+  id                 String   @id @default(cuid())
+  guildId            String?
+  providerRequests   Json
+  requestedLanguages Int
+  producedLanguages  Int
+  cacheHits          Int
+  fallbackOccurred   Boolean
+  partialFallback    Boolean
+  characters         Int
+  totalLatencyMs     Int
+  createdAt          DateTime @default(now())
+
+  @@index([guildId, createdAt])
+}

@@ -1,0 +1,2 @@
+CREATE TABLE "TranslationBatchUsage" ("id" TEXT PRIMARY KEY,"guildId" TEXT,"providerRequests" JSONB NOT NULL,"requestedLanguages" INTEGER NOT NULL,"producedLanguages" INTEGER NOT NULL,"cacheHits" INTEGER NOT NULL,"fallbackOccurred" BOOLEAN NOT NULL,"partialFallback" BOOLEAN NOT NULL,"characters" INTEGER NOT NULL,"totalLatencyMs" INTEGER NOT NULL,"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "TranslationBatchUsage_guildId_createdAt_idx" ON "TranslationBatchUsage"("guildId","createdAt");

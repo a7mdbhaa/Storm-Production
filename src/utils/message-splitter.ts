@@ -1,0 +1,1 @@
+export function splitMessage(text:string,limit=1900):string[]{if(text.length<=limit)return[text];const out:string[]=[];let rest=text;while(rest.length>limit){let cut=Math.max(rest.lastIndexOf('\n\n',limit),rest.lastIndexOf('\n',limit),rest.lastIndexOf(' ',limit));if(cut<limit*.5)cut=limit;out.push(rest.slice(0,cut));rest=rest.slice(cut);}if(rest)out.push(rest);return out;}
