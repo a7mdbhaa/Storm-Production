@@ -12,7 +12,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
-    "wispbyte:start": "npx prisma generate && npm run build && npm start",
+    "wispbyte:start": "npm install && npx prisma generate && npm run build && npm start",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
