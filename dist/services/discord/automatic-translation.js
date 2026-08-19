@@ -1,0 +1,122 @@
+import { ChannelType } from 'discord.js';
+import { stripIgnoreMarker } from './ignore-rules.js';
+import { splitMessage } from '../../utils/message-splitter.js';
+import { logger } from '../../utils/logger.js';
+import { resolveEffectiveStyle, TranslationOutputRenderer } from './output-style.js';
+import { stripTranslationDelimiters } from '../translation/provider-output.js';
+async function allowedInput(m, c, chConfig, userRule) { if (!m.guildId || !m.content || m.author.id === c.client.user?.id)
+    return false; if (await c.db.translatedMessage.findUnique({ where: { translatedMessageId: m.id } }))
+    return false; const ch = chConfig !== undefined ? chConfig : (c.settingsCache ? await c.settingsCache.getChannelSettings(m.channelId) : await c.db.channelSettings.findUnique({ where: { channelId: m.channelId } })); if (ch?.ignored || ('topic' in m.channel && m.channel.topic?.toLowerCase().includes('no-translate')))
+    return false; const user = userRule !== undefined ? userRule : (c.settingsCache ? await c.settingsCache.getUserRule(m.guildId, m.author.id) : await c.db.userRule.findUnique({ where: { guildId_userId: { guildId: m.guildId, userId: m.author.id } } })); if (user?.banned)
+    return false; if (m.webhookId) {
+    const managed = c.settingsCache ? await c.settingsCache.getManagedWebhook(m.channelId) : await c.db.managedWebhook.findUnique({ where: { webhookId: m.webhookId } });
+    if (managed?.webhookId === m.webhookId || (!c.settingsCache && managed))
+        return false;
+    const allowed = c.settingsCache ? await c.settingsCache.getAllowedWebhook(m.guildId, m.webhookId) : await c.db.allowedWebhook.findUnique({ where: { guildId_webhookId: { guildId: m.guildId, webhookId: m.webhookId } } });
+    return !!allowed;
+} if (m.author.bot) {
+    if (ch?.botsMode !== 'allowed')
+        return false;
+    const allowed = c.settingsCache ? await c.settingsCache.getAllowedBot(m.guildId, m.author.id) : await c.db.allowedBot.findUnique({ where: { guildId_botId: { guildId: m.guildId, botId: m.author.id } } });
+    return !!allowed;
+} return true; }
+async function protectedTerms(guildId, c) { if (c.settingsCache)
+    return c.settingsCache.getIgnoreTerms(guildId); return (await c.db.ignoreTerm.findMany({ where: { guildId } })).map(x => x.term); }
+async function recordUsage(m, c, r) { await c.db.translationUsage.create({ data: { guildId: m.guildId, provider: r.provider, sourceLanguage: r.sourceLanguage, targetLanguage: r.targetLanguage, success: true, cached: r.cached, latencyMs: r.latencyMs, characters: m.content.length } }).catch(() => undefined); }
+async function recordBatch(m, c, b, requested) { const requests = Object.values(b.providerRequests).reduce((a, n) => a + n, 0), cacheHits = [...b.translations.values()].filter((x) => x.cached).length; await c.db.translationBatchUsage.create({ data: { guildId: m.guildId, providerRequests: b.providerRequests, requestedLanguages: requested, producedLanguages: b.translations.size, cacheHits, fallbackOccurred: (b.providerRequests.groq + b.providerRequests.google) > 0, partialFallback: b.translations.size > 0 && requests > 1, characters: m.content.length, totalLatencyMs: b.totalLatencyMs } }).catch(() => undefined); }
+export async function onMessage(m, c) {
+    if (!m.guildId || !m.content || m.author.id === c.client.user?.id)
+        return;
+    const [config, user, guildSettings] = await Promise.all([c.settingsCache ? c.settingsCache.getChannelSettings(m.channelId) : c.db.channelSettings.findUnique({ where: { channelId: m.channelId }, include: { group: { include: { channels: true } } } }), c.settingsCache ? c.settingsCache.getUserRule(m.guildId, m.author.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: m.guildId, userId: m.author.id } } }), c.settingsCache ? c.settingsCache.getGuildSettings(m.guildId) : c.db.guildSettings.findUnique({ where: { guildId: m.guildId } })]);
+    if (!await allowedInput(m, c, config, user))
+        return;
+    const marker = stripIgnoreMarker(m.content);
+    if (marker.ignored)
+        return;
+    const renderer = new TranslationOutputRenderer(c.db, undefined, c.settingsCache), destinations = (config?.group?.channels ?? []).filter((x) => x.channelId !== m.channelId && x.language), sameTargets = [...(config?.autoEnabled ? config.autoLanguages : []), ...(user?.autoLanguage ? [user.autoLanguage] : [])], allTargets = [...new Set([...sameTargets, ...destinations.map((x) => x.language).filter(Boolean)])];
+    if (!allTargets.length)
+        return;
+    let batch;
+    try {
+        batch = await c.translation.translateMany({ text: marker.text, targetLanguages: allTargets, protectedTerms: await protectedTerms(m.guildId, c), guildId: m.guildId, channelId: m.channelId, userId: m.author.id });
+    }
+    catch (e) {
+        logger.warn({ error: e instanceof Error ? e.message : 'unknown' }, 'Automatic translation batch failed');
+        return;
+    }
+    void recordBatch(m, c, batch, allTargets.length);
+    for (const target of new Set(sameTargets)) {
+        const result = batch.translations.get(target);
+        if (!result || result.sourceLanguage === target)
+            continue;
+        try {
+            let index = 0;
+            for (const part of splitMessage(stripTranslationDelimiters(result.translatedText))) {
+                const sent = await renderer.send({ destination: m.channel, source: m, content: part, style: resolveEffectiveStyle(config?.style, guildSettings?.defaultStyle), sameChannel: true });
+                await c.db.translatedMessage.create({ data: { guildId: m.guildId, originalChannelId: m.channelId, originalMessageId: m.id, translatedChannelId: m.channelId, translatedMessageId: sent.id, targetLanguage: target, provider: result.provider, partIndex: index++ } });
+            }
+            void recordUsage(m, c, result);
+        }
+        catch (e) {
+            logger.warn({ target, error: e instanceof Error ? e.message : 'unknown' }, 'Same-channel fan-out failed');
+        }
+    }
+    for (const dest of destinations) {
+        const result = batch.translations.get(dest.language);
+        if (!result || result.sourceLanguage === dest.language)
+            continue;
+        try {
+            const channel = await m.guild.channels.fetch(dest.channelId);
+            if (!channel || channel.type !== ChannelType.GuildText)
+                continue;
+            const parts = splitMessage([stripTranslationDelimiters(result.translatedText), ...m.attachments.map(a => a.url)].join('\n'));
+            let index = 0;
+            for (const part of parts) {
+                const sent = await renderer.send({ destination: channel, source: m, content: part, style: resolveEffectiveStyle(dest.style, guildSettings?.defaultStyle), sameChannel: false });
+                await c.db.translatedMessage.create({ data: { guildId: m.guildId, originalChannelId: m.channelId, originalMessageId: m.id, translatedChannelId: dest.channelId, translatedMessageId: sent.id, targetLanguage: dest.language, provider: result.provider, partIndex: index++ } });
+            }
+            void recordUsage(m, c, result);
+        }
+        catch (e) {
+            logger.warn({ destination: dest.channelId, error: e instanceof Error ? e.message : 'unknown' }, 'Group fan-out failed');
+        }
+    }
+}
+export async function onMessageUpdate(_old, newMessage, c) { if (!newMessage.content)
+    return; const rows = await c.db.translatedMessage.findMany({ where: { originalMessageId: newMessage.id }, orderBy: { partIndex: 'asc' } }), grouped = new Map(), renderer = new TranslationOutputRenderer(c.db, undefined, c.settingsCache); for (const row of rows) {
+    const list = grouped.get(row.targetLanguage) ?? [];
+    list.push(row);
+    grouped.set(row.targetLanguage, list);
+} const targets = [...grouped.keys()]; if (!targets.length)
+    return; const batch = await c.translation.translateMany({ text: newMessage.content, targetLanguages: targets, protectedTerms: await protectedTerms(newMessage.guildId, c) }); for (const [target, maps] of grouped) {
+    const result = batch.translations.get(target);
+    if (!result)
+        continue;
+    try {
+        const parts = splitMessage(result.translatedText);
+        for (let k = 0; k < maps.length; k++) {
+            const map = maps[k], channel = await c.client.channels.fetch(map.translatedChannelId);
+            if (!channel?.isTextBased())
+                continue;
+            if (parts[k])
+                await renderer.edit(channel, map.translatedMessageId, parts[k]);
+            else {
+                const msg = await channel.messages.fetch(map.translatedMessageId);
+                await msg.delete();
+                await c.db.translatedMessage.delete({ where: { translatedMessageId: map.translatedMessageId } });
+            }
+        }
+    }
+    catch (e) {
+        logger.warn({ target, error: e instanceof Error ? e.message : 'unknown' }, 'Translation edit synchronization failed');
+    }
+} }
+export async function onMessageDelete(m, c) { const rows = await c.db.translatedMessage.findMany({ where: { originalMessageId: m.id } }); for (const row of rows) {
+    try {
+        const channel = await c.client.channels.fetch(row.translatedChannelId);
+        if (channel?.isTextBased())
+            await (await channel.messages.fetch(row.translatedMessageId)).delete();
+    }
+    catch { /* already absent or inaccessible */ }
+} await c.db.translatedMessage.deleteMany({ where: { originalMessageId: m.id } }); }
+//# sourceMappingURL=automatic-translation.js.map

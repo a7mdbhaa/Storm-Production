@@ -1,0 +1,9 @@
+export function stripIgnoreMarker(text) { const match = text.match(/\s+(--i|--ignore|--notranslate)\s*$/i); return { ignored: !!match, text: match ? text.slice(0, match.index).trimEnd() : text }; }
+export function matchesTerm(value, term, mode) { switch (mode) {
+    case 'case-insensitive': return value.toLowerCase().includes(term.toLowerCase());
+    case 'prefix': return value.startsWith(term);
+    case 'suffix': return value.endsWith(term);
+    case 'contains': return value.includes(term);
+    default: return value === term || value.includes(term);
+} }
+//# sourceMappingURL=ignore-rules.js.map
