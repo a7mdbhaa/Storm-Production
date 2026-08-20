@@ -231,7 +231,7 @@ export async function executeCommand(i, c) {
     }
     if (n === 'status') {
         const msg = STATUS_MESSAGES[Math.floor(Math.random() * STATUS_MESSAGES.length)];
-        const embed = new EmbedBuilder().setColor(0x5865F2).setAuthor({ name: 'Storm Translator', iconURL: c.client.user?.displayAvatarURL() }).setDescription(`>>> ${msg}`).setFooter({ text: 'In loving memory of Storm 🐾' });
+        const embed = new EmbedBuilder().setColor(0xFF94B8).setAuthor({ name: '🐾  Storm Translator  ✨', iconURL: c.client.user?.displayAvatarURL() }).setDescription(`> ❝ *${msg}* ❞\n\n・ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ ・\n✨ *Always watching over our server conversations* 💕`).setFooter({ text: 'Forever loved, forever our good companion 🐾 ˖⁺‧₊˚', iconURL: c.client.user?.displayAvatarURL() }).setTimestamp();
         return i.reply({ embeds: [embed] });
     }
     if (n === 'diagnostics') {
