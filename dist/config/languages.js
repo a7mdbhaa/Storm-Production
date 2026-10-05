@@ -4,4 +4,7 @@ export const languages = rows.split(';').map(row => { const [code, name, nativeN
 export function findLanguage(value) { const q = value.trim().toLowerCase(); return languages.find(l => l.aliases.includes(q) || l.flags.includes(value.trim())); }
 export function searchLanguages(value, limit = 25) { const q = value.toLowerCase(); return languages.filter(l => l.code.toLowerCase().includes(q) || l.name.toLowerCase().includes(q) || l.nativeName.toLowerCase().includes(q)).slice(0, limit); }
 export function languagesForFlag(flag) { return flagMap[flag] ?? []; }
+export function isSameLanguage(a, b) { if (!a || !b)
+    return false; const langA = findLanguage(a)?.code ?? a.trim().toLowerCase(); const langB = findLanguage(b)?.code ?? b.trim().toLowerCase(); if (langA === langB)
+    return true; const baseA = langA.split(/[-_]/)[0]; const baseB = langB.split(/[-_]/)[0]; return Boolean(baseA && baseB && baseA === baseB); }
 //# sourceMappingURL=languages.js.map

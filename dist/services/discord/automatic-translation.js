@@ -4,6 +4,7 @@ import { splitMessage } from '../../utils/message-splitter.js';
 import { logger } from '../../utils/logger.js';
 import { resolveEffectiveStyle, TranslationOutputRenderer } from './output-style.js';
 import { stripTranslationDelimiters } from '../translation/provider-output.js';
+import { isSameLanguage } from '../../config/languages.js';
 async function allowedInput(m, c, chConfig, userRule) { if (!m.guildId || !m.content || m.author.id === c.client.user?.id)
     return false; if (await c.db.translatedMessage.findUnique({ where: { translatedMessageId: m.id } }))
     return false; const ch = chConfig !== undefined ? chConfig : (c.settingsCache ? await c.settingsCache.getChannelSettings(m.channelId) : await c.db.channelSettings.findUnique({ where: { channelId: m.channelId } })); if (ch?.ignored || ('topic' in m.channel && m.channel.topic?.toLowerCase().includes('no-translate')))
@@ -47,11 +48,17 @@ export async function onMessage(m, c) {
     void recordBatch(m, c, batch, allTargets.length);
     for (const target of new Set(sameTargets)) {
         const result = batch.translations.get(target);
-        if (!result || result.sourceLanguage === target)
+        if (!result)
+            continue;
+        const sourceLang = result.sourceLanguage ?? batch.sourceLanguage;
+        if (isSameLanguage(sourceLang, target))
+            continue;
+        const cleanText = stripTranslationDelimiters(result.translatedText).trim();
+        if (cleanText.toLowerCase() === marker.text.trim().toLowerCase())
             continue;
         try {
             let index = 0;
-            for (const part of splitMessage(stripTranslationDelimiters(result.translatedText))) {
+            for (const part of splitMessage(cleanText)) {
                 const sent = await renderer.send({ destination: m.channel, source: m, content: part, style: resolveEffectiveStyle(config?.style, guildSettings?.defaultStyle), sameChannel: true });
                 await c.db.translatedMessage.create({ data: { guildId: m.guildId, originalChannelId: m.channelId, originalMessageId: m.id, translatedChannelId: m.channelId, translatedMessageId: sent.id, targetLanguage: target, provider: result.provider, partIndex: index++ } });
             }
@@ -63,7 +70,10 @@ export async function onMessage(m, c) {
     }
     for (const dest of destinations) {
         const result = batch.translations.get(dest.language);
-        if (!result || result.sourceLanguage === dest.language)
+        if (!result)
+            continue;
+        const sourceLang = result.sourceLanguage ?? batch.sourceLanguage;
+        if (isSameLanguage(sourceLang, dest.language))
             continue;
         try {
             const channel = await m.guild.channels.fetch(dest.channelId);

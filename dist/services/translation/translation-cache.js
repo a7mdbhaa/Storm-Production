@@ -27,7 +27,7 @@ export class TranslationCache {
     } }
     async set(r, result) { if (!this.env.ENABLE_TRANSLATION_CACHE)
         return; const key = this.key(r), sourceHash = createHash('sha256').update(r.text).digest('hex'); this.setMemory(key, result); try {
-        await this.db.translationCache.upsert({ where: { key }, create: { key, sourceHash, sourceLanguage: r.sourceLanguage ?? 'auto', targetLanguage: r.targetLanguage, translatedText: result.translatedText, provider: result.provider, expiresAt: new Date(Date.now() + this.env.TRANSLATION_CACHE_TTL_SECONDS * 1000) }, update: { translatedText: result.translatedText, provider: result.provider, expiresAt: new Date(Date.now() + this.env.TRANSLATION_CACHE_TTL_SECONDS * 1000) } });
+        await this.db.translationCache.upsert({ where: { key }, create: { key, sourceHash, sourceLanguage: result.sourceLanguage ?? r.sourceLanguage ?? 'auto', targetLanguage: r.targetLanguage, translatedText: result.translatedText, provider: result.provider, expiresAt: new Date(Date.now() + this.env.TRANSLATION_CACHE_TTL_SECONDS * 1000) }, update: { translatedText: result.translatedText, provider: result.provider, expiresAt: new Date(Date.now() + this.env.TRANSLATION_CACHE_TTL_SECONDS * 1000) } });
         if (++this.writes % 100 === 0)
             await this.db.translationCache.deleteMany({ where: { expiresAt: { lt: new Date() } } });
     }

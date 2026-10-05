@@ -5,3 +5,4 @@ export const languages:Language[]=rows.split(';').map(row=>{const[code,name,nati
 export function findLanguage(value:string){const q=value.trim().toLowerCase();return languages.find(l=>l.aliases.includes(q)||l.flags.includes(value.trim()));}
 export function searchLanguages(value:string,limit=25){const q=value.toLowerCase();return languages.filter(l=>l.code.toLowerCase().includes(q)||l.name.toLowerCase().includes(q)||l.nativeName.toLowerCase().includes(q)).slice(0,limit);}
 export function languagesForFlag(flag:string){return flagMap[flag]??[];}
+export function isSameLanguage(a?:string|null,b?:string|null):boolean{if(!a||!b)return false;const langA=findLanguage(a)?.code??a.trim().toLowerCase();const langB=findLanguage(b)?.code??b.trim().toLowerCase();if(langA===langB)return true;const baseA=langA.split(/[-_]/)[0];const baseB=langB.split(/[-_]/)[0];return Boolean(baseA&&baseB&&baseA===baseB);}

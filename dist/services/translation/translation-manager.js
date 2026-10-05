@@ -62,7 +62,7 @@ export class TranslationManager {
                     try {
                         const translatedText = protectedSource.restore(value.text), translation = { translatedText, sourceLanguage: value.sourceLanguage ?? sourceLanguage, targetLanguage: target, provider: provider.name, latencyMs: value.latencyMs, fallbackDepth: DEPTH[provider.name], cached: false };
                         translations.set(target, translation);
-                        await this.cache.set({ text: request.text, targetLanguage: target, sourceLanguage: request.sourceLanguage, protectedTerms: request.protectedTerms }, translation);
+                        await this.cache.set({ text: request.text, targetLanguage: target, sourceLanguage: translation.sourceLanguage ?? request.sourceLanguage, protectedTerms: request.protectedTerms }, translation);
                     }
                     catch (e) {
                         logger.warn({ provider: provider.name, target, error: e instanceof Error ? e.message : 'invalid token output' }, 'Discarding invalid batch translation entry');
