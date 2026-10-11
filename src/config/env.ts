@@ -8,7 +8,7 @@ const schema = z.object({
   TRANSLATION_TIMEOUT_MS:z.coerce.number().int().positive().default(10000), TRANSLATION_MAX_RETRIES:z.coerce.number().int().min(0).default(0),
   GEMINI_TIMEOUT_MS:z.coerce.number().int().positive().optional(), GROQ_TIMEOUT_MS:z.coerce.number().int().positive().optional(), GOOGLE_TRANSLATE_TIMEOUT_MS:z.coerce.number().int().positive().optional(), GEMINI_COOLDOWN_SECONDS:z.coerce.number().int().positive().default(60),
   MAX_TRANSLATION_BATCH_SIZE:z.coerce.number().int().positive().max(15).default(15), MAX_TRANSLATION_CONCURRENCY:z.coerce.number().int().positive().default(5), MAX_TARGET_LANGUAGES:z.coerce.number().int().positive().max(15).default(15),
-  ENABLE_TRANSLATION_CACHE:bool.default('true'), TRANSLATION_CACHE_TTL_SECONDS:z.coerce.number().int().positive().default(86400), MEMORY_CACHE_MAX_ENTRIES:z.coerce.number().int().positive().default(1000), ENABLE_TTS:bool
+  ENABLE_TRANSLATION_CACHE:bool.default('true'), TRANSLATION_CACHE_TTL_SECONDS:z.coerce.number().int().positive().default(86400), MEMORY_CACHE_MAX_ENTRIES:z.coerce.number().int().positive().default(1000), ENABLE_TTS:bool.default('true')
 });
 export type Env = z.infer<typeof schema>;
 export function loadEnv(source:NodeJS.ProcessEnv=process.env):Env { const parsed=schema.safeParse(source); if(!parsed.success) throw new Error(`Invalid environment configuration: ${parsed.error.issues.map(i=>i.path.join('.')+': '+i.message).join('; ')}`); return parsed.data; }

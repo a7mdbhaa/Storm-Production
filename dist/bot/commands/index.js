@@ -1,4 +1,4 @@
-import { ApplicationCommandType, ApplicationIntegrationType, ContextMenuCommandBuilder, EmbedBuilder, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
+import { ApplicationCommandType, ApplicationIntegrationType, AttachmentBuilder, ContextMenuCommandBuilder, EmbedBuilder, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
 import { findLanguage, languages, searchLanguages } from '../../config/languages.js';
 import { splitMessage } from '../../utils/message-splitter.js';
 export const STATUS_MESSAGES = [
@@ -56,7 +56,7 @@ const builders = [
     userApp(new SlashCommandBuilder().setName('version').setDescription('Show bot version')),
     userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
     userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
-    userApp(new SlashCommandBuilder().setName('tts').setDescription('Text-to-speech').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true))),
+    userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o => o.setName('text').setDescription('Text to speak').setRequired(true)), 'language', false)),
     userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
     userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message))
 ];
@@ -246,9 +246,46 @@ export async function executeCommand(i, c) {
     else if (n === 'invite')
         await i.reply({ content: `https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`, ephemeral: true });
     else if (n === 'help')
-        await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation**\n/translate /detect /transliterate /languages\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
-    else if (n === 'tts')
-        await i.reply({ content: c.env.ENABLE_TTS ? 'No TTS provider is configured.' : 'Text-to-speech is currently disabled on this bot.', ephemeral: true });
+        await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation**\n/translate /detect /transliterate /languages /tts\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
+    else if (n === 'tts') {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const text = i.options.getString('text', true);
+        if (!text.trim())
+            return i.editReply('Please provide text to convert to speech.');
+        const langOpt = i.options.getString('language');
+        let langCode = 'en', langName = 'English';
+        if (langOpt) {
+            const parsed = parseLang(langOpt);
+            langCode = parsed.code.split(/[-_]/)[0] ?? 'en';
+            langName = parsed.name;
+        }
+        else {
+            try {
+                const d = await c.translation.detect(text);
+                const l = findLanguage(d.language);
+                if (l) {
+                    langCode = l.code.split(/[-_]/)[0] ?? 'en';
+                    langName = l.name;
+                }
+            }
+            catch {
+                langCode = 'en';
+                langName = 'English';
+            }
+        }
+        try {
+            const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text.slice(0, 200))}&tl=${encodeURIComponent(langCode)}&client=tw-ob`;
+            const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
+            if (!res.ok)
+                throw new Error(`TTS service status ${res.status}`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            const attachment = new AttachmentBuilder(buf, { name: `speech-${langCode}.mp3` });
+            return i.editReply({ content: `🔊 **Text-to-Speech (${langName})**\n> ❝ *${text.slice(0, 200)}* ❞`, files: [attachment] });
+        }
+        catch (err) {
+            return i.editReply(`Failed to generate speech audio: ${err.message}`);
+        }
+    }
 }
 export async function executeContextMenu(i, c) {
     const g = i.guildId, text = i.targetMessage.content;
