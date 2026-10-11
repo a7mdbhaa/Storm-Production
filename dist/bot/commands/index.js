@@ -1,4 +1,4 @@
-import { EmbedBuilder, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
+import { ApplicationIntegrationType, EmbedBuilder, InteractionContextType, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
 import { findLanguage, languages, searchLanguages } from '../../config/languages.js';
 import { splitMessage } from '../../utils/message-splitter.js';
 export const STATUS_MESSAGES = [
@@ -14,11 +14,12 @@ export const STATUS_MESSAGES = [
 ];
 const admin = (b) => b.setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 const lang = (b, name = 'language', required = true) => b.addStringOption((o) => o.setName(name).setDescription('Language name, native name, ISO code, or flag').setAutocomplete(true).setRequired(required));
+const userApp = (b) => b.setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall).setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel);
 const builders = [
-    lang(new SlashCommandBuilder().setName('translate').setDescription('Translate text').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)), 'language').addStringOption((o) => o.setName('from').setDescription('Source language').setAutocomplete(true)).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result')),
-    new SlashCommandBuilder().setName('detect').setDescription('Detect a message language').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)),
-    new SlashCommandBuilder().setName('transliterate').setDescription('Transliterate text').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)).addStringOption(o => o.setName('script').setDescription('Target script').setRequired(true)),
-    new SlashCommandBuilder().setName('languages').setDescription('List or search supported languages').addStringOption(o => o.setName('search').setDescription('Search text')),
+    userApp(lang(new SlashCommandBuilder().setName('translate').setDescription('Translate text').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)), 'language').addStringOption((o) => o.setName('from').setDescription('Source language').setAutocomplete(true)).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result'))),
+    userApp(new SlashCommandBuilder().setName('detect').setDescription('Detect a message language').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true))),
+    userApp(new SlashCommandBuilder().setName('transliterate').setDescription('Transliterate text').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)).addStringOption(o => o.setName('script').setDescription('Target script').setRequired(true))),
+    userApp(new SlashCommandBuilder().setName('languages').setDescription('List or search supported languages').addStringOption(o => o.setName('search').setDescription('Search text'))),
     admin(lang(new SlashCommandBuilder().setName('channel-link').setDescription('Link this channel to a translation group').addStringOption(o => o.setName('group').setDescription('Group name').setRequired(true)))),
     admin(new SlashCommandBuilder().setName('channel-unlink').setDescription('Unlink this channel')),
     new SlashCommandBuilder().setName('channel-groups').setDescription('List translation groups'),
@@ -50,12 +51,12 @@ const builders = [
     admin(new SlashCommandBuilder().setName('bot-locale').setDescription('Set interface locale').addStringOption(o => o.setName('locale').setDescription('en, ar, fr, de, es').setRequired(true).addChoices(...['en', 'ar', 'fr', 'de', 'es'].map(x => ({ name: x, value: x }))))),
     admin(new SlashCommandBuilder().setName('command-permissions').setDescription('Set command access').addStringOption(o => o.setName('mode').setDescription('Access').setRequired(true).addChoices({ name: 'Everyone', value: 'everyone' }, { name: 'Administrators', value: 'administrators' }, { name: 'Specific roles', value: 'roles' })).addRoleOption(o => o.setName('role').setDescription('Allowed role'))),
     new SlashCommandBuilder().setName('stats').setDescription('Show translation statistics'),
-    new SlashCommandBuilder().setName('status').setDescription('Show bot status message'),
-    new SlashCommandBuilder().setName('diagnostics').setDescription('Show detailed technical service diagnostics'),
-    new SlashCommandBuilder().setName('version').setDescription('Show bot version'),
-    new SlashCommandBuilder().setName('invite').setDescription('Get bot invite'),
-    new SlashCommandBuilder().setName('help').setDescription('Show command help'),
-    new SlashCommandBuilder().setName('tts').setDescription('Text-to-speech').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true))
+    userApp(new SlashCommandBuilder().setName('status').setDescription('Show bot status message')),
+    userApp(new SlashCommandBuilder().setName('diagnostics').setDescription('Show detailed technical service diagnostics')),
+    userApp(new SlashCommandBuilder().setName('version').setDescription('Show bot version')),
+    userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
+    userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
+    userApp(new SlashCommandBuilder().setName('tts').setDescription('Text-to-speech').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)))
 ];
 export const commandData = builders.map(x => x.toJSON());
 const requireGuild = (i) => { if (!i.guildId)
