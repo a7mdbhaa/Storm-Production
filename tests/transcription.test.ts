@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { commandData } from '../src/bot/commands/index.js';
+import { commandData, resolveUserTargetLanguage } from '../src/bot/commands/index.js';
 import { transcribeAudio } from '../src/services/audio/transcription.js';
 
 describe('Speech-to-Text Transcription Commands', () => {
@@ -32,6 +32,16 @@ describe('Speech-to-Text Transcription Commands', () => {
     const privateOpt = cmd?.options?.find((o: any) => o.name === 'private');
     expect(privateOpt).toBeDefined();
     expect(privateOpt?.required).toBe(false);
+  });
+
+  it('registers /my-language with user app integration types', () => {
+    const cmd = commandData.find(c => c.name === 'my-language');
+    expect(cmd).toBeDefined();
+    expect(cmd?.integration_types).toEqual([0, 1]);
+    expect(cmd?.contexts).toEqual([0, 1, 2]);
+    const langOpt = cmd?.options?.find((o: any) => o.name === 'language');
+    expect(langOpt).toBeDefined();
+    expect(langOpt?.required).toBe(false);
   });
 });
 
@@ -66,3 +76,35 @@ describe('transcribeAudio service', () => {
     expect(res.durationSeconds).toBe(5);
   });
 });
+
+describe('resolveUserTargetLanguage', () => {
+  it('falls back to Discord locale when no personal or guild rule is set', async () => {
+    const mockContext: any = {
+      db: {
+        userRule: { findUnique: vi.fn(async () => null) },
+      },
+    };
+    const lang = await resolveUserTargetLanguage('user123', null, 'ar', mockContext);
+    expect(lang.code).toBe('ar');
+    expect(lang.name).toBe('Arabic');
+  });
+
+  it('uses global personal language preference when set', async () => {
+    const mockContext: any = {
+      db: {
+        userRule: {
+          findUnique: vi.fn(async ({ where }) => {
+            if (where?.guildId_userId?.guildId === 'global') {
+              return { autoLanguage: 'es' };
+            }
+            return null;
+          }),
+        },
+      },
+    };
+    const lang = await resolveUserTargetLanguage('user123', null, 'en', mockContext);
+    expect(lang.code).toBe('es');
+    expect(lang.name).toBe('Spanish');
+  });
+});
+

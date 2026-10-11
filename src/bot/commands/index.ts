@@ -62,6 +62,7 @@ const builders:any[]=[
  userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
  userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o=>o.setName('text').setDescription('Text to speak').setRequired(true)),'language',false).addBooleanOption((o:any)=>o.setName('private').setDescription('Only you can see the result'))),
  userApp(lang(new SlashCommandBuilder().setName('transcribe').setDescription('Convert voice note or audio file to text').addAttachmentOption(o=>o.setName('audio').setDescription('Audio or voice file to transcribe').setRequired(true)),'translate',false).addBooleanOption((o:any)=>o.setName('private').setDescription('Only you can see the result'))),
+ userApp(lang(new SlashCommandBuilder().setName('my-language').setDescription('Set or view your personal translation language for DMs and servers'),'language',false)),
  userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
  userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message)),
  userApp(new ContextMenuCommandBuilder().setName('Transcribe Audio').setType(ApplicationCommandType.Message))
@@ -71,6 +72,21 @@ export const commandData=builders.map(x=>x.toJSON());
 const requireGuild=(i:ChatInputCommandInteraction)=>{if(!i.guildId)throw new Error('This command is only available in servers.');return i.guildId;};
 const parseLang=(v:string)=>{const l=findLanguage(v);if(!l)throw new Error(`Unknown language: ${v}`);return l;};
 const ok=(i:ChatInputCommandInteraction,text:string)=>i.reply({content:`✅ ${text}`,ephemeral:true});
+export async function resolveUserTargetLanguage(userId:string,guildId:string|null|undefined,locale:string,c:AppContext){
+ if(guildId){
+  const serverRule=c.settingsCache?await c.settingsCache.getUserRule(guildId,userId):await c.db.userRule.findUnique({where:{guildId_userId:{guildId,userId}}});
+  if(serverRule?.autoLanguage){const l=findLanguage(serverRule.autoLanguage);if(l)return l;}
+ }
+ const globalRule=await c.db.userRule.findUnique({where:{guildId_userId:{guildId:'global',userId}}}).catch(()=>null);
+ if(globalRule?.autoLanguage){const l=findLanguage(globalRule.autoLanguage);if(l)return l;}
+ if(guildId){
+  const guildSettings=c.settingsCache?await c.settingsCache.getGuildSettings(guildId):await c.db.guildSettings.findUnique({where:{guildId}});
+  if(guildSettings?.defaultLanguage){const l=findLanguage(guildSettings.defaultLanguage);if(l)return l;}
+ }
+ const localeLang=findLanguage(locale);
+ if(localeLang)return localeLang;
+ return {code:'en',name:'English',nativeName:'English',aliases:['en','english'],flags:['🇬🇧']};
+}
 
 export async function autocomplete(i:any){const q=i.options.getFocused();await i.respond(searchLanguages(q).map(l=>({name:`${l.name} — ${l.nativeName} (${l.code})`.slice(0,100),value:l.code})));}
 
@@ -97,7 +113,7 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
  if(n==='stats'){const guildId=requireGuild(i),now=new Date(),day=new Date(now.getFullYear(),now.getMonth(),now.getDate()),month=new Date(now.getFullYear(),now.getMonth(),1),[rows,batches]=await Promise.all([c.db.translationUsage.findMany({where:{guildId,createdAt:{gte:month}}}),c.db.translationBatchUsage.findMany({where:{guildId,createdAt:{gte:month}}})]);const success=rows.filter(x=>x.success),by=(p:string)=>success.filter(x=>x.provider===p).length,today=batches.filter(x=>x.createdAt>=day),requests=today.reduce((sum,x)=>sum+Object.values(x.providerRequests as Record<string,number>).reduce((a,n)=>a+n,0),0),produced=today.reduce((sum,x)=>sum+x.producedLanguages,0),cacheHits=today.reduce((sum,x)=>sum+x.cacheHits,0);return i.reply({content:`Translations today: ${rows.filter(x=>x.createdAt>=day).length}\nTranslations this month: ${rows.length}\nSuccessful translations: ${success.length}\nFailed translations: ${rows.length-success.length}\nGemini translations: ${by('gemini')}\nGroq translations: ${by('groq')}\nGoogle Translate translations: ${by('google')}\nCache hits: ${success.filter(x=>x.cached).length}\nAverage latency: ${success.length?Math.round(success.reduce((a,x)=>a+x.latencyMs,0)/success.length):0} ms\nCharacters translated: ${success.reduce((a,x)=>a+x.characters,0)}\nProvider API requests today: ${requests}\nTranslations produced today: ${produced}\nAverage languages per provider request: ${requests?(produced/requests).toFixed(1):'0'}\nBatch cache hit rate: ${produced+cacheHits?Math.round(cacheHits/(produced+cacheHits)*100):0}%`,ephemeral:true});}
  if(n==='status'){const msg=STATUS_MESSAGES[Math.floor(Math.random()*STATUS_MESSAGES.length)]!;const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🐾  Storm Translator  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(`> ❝ *${msg}* ❞\n\n・ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ ・\n✨ *Always watching over our server conversations* 💕`).setFooter({text:'Forever loved, forever our good companion 🐾 ˖⁺‧₊˚',iconURL:c.client.user?.displayAvatarURL()}).setTimestamp();return i.reply({embeds:[embed]});}
  if(n==='diagnostics'){const hs=(p:'gemini'|'groq'|'google')=>c.translation.health.status(p,!!c.translation.providers.find(x=>x.name===p)?.isConfigured());return i.reply({content:`🌐 Translator Bot Diagnostics\n\nBot status: Online.\nDiscord gateway: ${c.client.isReady()?'Connected':'Reconnecting'}.\nHosting environment: Wispbyte.\nWispbyte bot process: Healthy.\nGemini provider: ${hs('gemini')}.\nGroq provider: ${hs('groq')}.\nGoogle Translate provider: ${hs('google')}.\nTranslation fallback order: Gemini → Groq → Google Translate.\nDatabase: Connected to Neon PostgreSQL.\nTranslation cache: ${c.env.ENABLE_TRANSLATION_CACHE?'Enabled':'Disabled'}.\nTranslation queue: ${c.translation.queue.size} request(s) waiting.\nAutomatic translation: Running.\nFlag-reaction translation: Running.\nWebhook mirroring: Ready.\nUptime: ${Math.floor(process.uptime())} seconds.\nVersion: ${c.env.BOT_VERSION}.\nThe bot is ready to translate messages.`,ephemeral:true});}
-  else if(n==='version')await i.reply({content:`Translator Bot version ${c.env.BOT_VERSION}`,ephemeral:true});else if(n==='invite')await i.reply({content:`https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`,ephemeral:true});else if(n==='help')await i.reply({embeds:[new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')],ephemeral:true});else if(n==='tts'){
+  else if(n==='version')await i.reply({content:`Translator Bot version ${c.env.BOT_VERSION}`,ephemeral:true});else if(n==='invite')await i.reply({content:`https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`,ephemeral:true});else if(n==='help')await i.reply({embeds:[new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe /my-language\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')],ephemeral:true});else if(n==='tts'){
    await i.deferReply({ephemeral:i.options.getBoolean('private')??false});
    const text=i.options.getString('text',true);
    if(!text.trim())return i.editReply('Please provide text to convert to speech.');
@@ -134,9 +150,11 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
     const detected=result.language?(findLanguage(result.language)?.name??result.language):undefined;
     const dur=result.durationSeconds?`${result.durationSeconds}s`:undefined;
     const translateOpt=i.options.getString('translate');
+    const targetLang=translateOpt?parseLang(translateOpt):await resolveUserTargetLanguage(i.user.id,g,i.locale,c);
+    const detectedBase=(result.language||'').toLowerCase().split(/[-_]/)[0];
+    const targetBase=targetLang.code.toLowerCase().split(/[-_]/)[0];
     let translated:string|undefined,targetName:string|undefined;
-    if(translateOpt){
-     const targetLang=parseLang(translateOpt);
+    if(translateOpt||(detectedBase&&targetBase&&detectedBase!==targetBase)){
      targetName=targetLang.name;
      const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
      const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
@@ -152,6 +170,22 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
     return i.editReply({embeds:[embed]});
    }catch(err:any){
     return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
+   }
+  }else if(n==='my-language'){
+   const langOpt=i.options.getString('language');
+   if(langOpt){
+    const l=parseLang(langOpt);
+    await c.db.userRule.upsert({where:{guildId_userId:{guildId:'global',userId:i.user.id}},create:{guildId:'global',userId:i.user.id,autoLanguage:l.code},update:{autoLanguage:l.code}});
+    return i.reply({content:`✅ Your personal translation language has been set to **${l.name}** (\`${l.code}\`).\nAudio transcriptions and translations in private chats and servers will automatically translate to **${l.name}**!`,ephemeral:true});
+   }else{
+    const row=await c.db.userRule.findUnique({where:{guildId_userId:{guildId:'global',userId:i.user.id}}}).catch(()=>null);
+    const current=row?.autoLanguage?findLanguage(row.autoLanguage):null;
+    const discordLang=findLanguage(i.locale);
+    if(current){
+     return i.reply({content:`🌐 Your personal translation language is currently set to **${current.name}** (\`${current.code}\`).\nTo change it, use \`/my-language language:<new language>\`.`,ephemeral:true});
+    }else{
+     return i.reply({content:`🌐 You haven't set a personal translation language yet (defaulting to Discord language: **${discordLang?.name??'English'}**).\nUse \`/my-language language:<your language>\` to set one!`,ephemeral:true});
+    }
    }
   }
  }
@@ -173,18 +207,15 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
    const result=await transcribeAudio(buf,mime,audioAttachment.name,c.env);
    const detected=result.language?(findLanguage(result.language)?.name??result.language):undefined;
    const dur=result.durationSeconds?`${result.durationSeconds}s`:undefined;
-   const userRule=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;
-   const guildSettings=g?await(c.settingsCache?c.settingsCache.getGuildSettings(g):c.db.guildSettings.findUnique({where:{guildId:g}})):null;
-   const targetCode=userRule?.autoLanguage??(g?guildSettings?.defaultLanguage:null);
+   const targetLang=await resolveUserTargetLanguage(i.user.id,g,i.locale,c);
+   const detectedBase=(result.language||'').toLowerCase().split(/[-_]/)[0];
+   const targetBase=targetLang.code.toLowerCase().split(/[-_]/)[0];
    let translated:string|undefined,targetName:string|undefined;
-   if(targetCode&&(!result.language||!result.language.toLowerCase().startsWith(targetCode.toLowerCase().split('-')[0]!))){
-    const targetLang=findLanguage(targetCode);
-    if(targetLang){
-     targetName=targetLang.name;
-     const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
-     const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
-     translated=tr.translations.get(targetLang.code)?.translatedText;
-    }
+   if(detectedBase&&targetBase&&detectedBase!==targetBase){
+    targetName=targetLang.name;
+    const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
+    const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
+    translated=tr.translations.get(targetLang.code)?.translatedText;
    }
    const descParts=[`> ❝ *${result.text.slice(0,3000)}* ❞`];
    if(translated&&targetName)descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0,3000)}`);
@@ -204,10 +235,7 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
 
  if(i.commandName==='Translate Message'){
   await i.deferReply({flags:MessageFlags.Ephemeral});
-  const userRule=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;
-  const guildSettings=g?await(c.settingsCache?c.settingsCache.getGuildSettings(g):c.db.guildSettings.findUnique({where:{guildId:g}})):null;
-  const targetCode=userRule?.autoLanguage??guildSettings?.defaultLanguage??'en';
-  const targetLang=findLanguage(targetCode)??{name:'English',code:'en'};
+  const targetLang=await resolveUserTargetLanguage(i.user.id,g,i.locale,c);
   const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
   const result=await c.translation.translateMany({text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
   const translated=result.translations.get(targetLang.code)?.translatedText;
