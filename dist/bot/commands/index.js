@@ -1,4 +1,4 @@
-import { ApplicationIntegrationType, EmbedBuilder, InteractionContextType, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
+import { ApplicationCommandType, ApplicationIntegrationType, ContextMenuCommandBuilder, EmbedBuilder, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
 import { findLanguage, languages, searchLanguages } from '../../config/languages.js';
 import { splitMessage } from '../../utils/message-splitter.js';
 export const STATUS_MESSAGES = [
@@ -56,7 +56,9 @@ const builders = [
     userApp(new SlashCommandBuilder().setName('version').setDescription('Show bot version')),
     userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
     userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
-    userApp(new SlashCommandBuilder().setName('tts').setDescription('Text-to-speech').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true)))
+    userApp(new SlashCommandBuilder().setName('tts').setDescription('Text-to-speech').addStringOption(o => o.setName('text').setDescription('Text').setRequired(true))),
+    userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
+    userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message))
 ];
 export const commandData = builders.map(x => x.toJSON());
 const requireGuild = (i) => { if (!i.guildId)
@@ -247,5 +249,34 @@ export async function executeCommand(i, c) {
         await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation**\n/translate /detect /transliterate /languages\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
     else if (n === 'tts')
         await i.reply({ content: c.env.ENABLE_TTS ? 'No TTS provider is configured.' : 'Text-to-speech is currently disabled on this bot.', ephemeral: true });
+}
+export async function executeContextMenu(i, c) {
+    const g = i.guildId, text = i.targetMessage.content;
+    if (!text || !text.trim())
+        return i.reply({ content: 'That message does not contain any text to translate.', flags: MessageFlags.Ephemeral });
+    const banned = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
+    if (banned?.banned)
+        throw new Error('You are not permitted to use translation features.');
+    if (i.commandName === 'Translate Message') {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const userRule = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
+        const guildSettings = g ? await (c.settingsCache ? c.settingsCache.getGuildSettings(g) : c.db.guildSettings.findUnique({ where: { guildId: g } })) : null;
+        const targetCode = userRule?.autoLanguage ?? guildSettings?.defaultLanguage ?? 'en';
+        const targetLang = findLanguage(targetCode) ?? { name: 'English', code: 'en' };
+        const terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
+        const result = await c.translation.translateMany({ text, targetLanguages: [targetLang.code], protectedTerms: terms, guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
+        const translated = result.translations.get(targetLang.code)?.translatedText;
+        if (!translated)
+            return i.editReply('Translation unavailable.');
+        const detected = result.sourceLanguage ? (findLanguage(result.sourceLanguage)?.name ?? result.sourceLanguage) : undefined;
+        const embed = new EmbedBuilder().setColor(0xFF94B8).setAuthor({ name: '🐾  Storm Translator  ✨', iconURL: c.client.user?.displayAvatarURL() }).setDescription(`> ❝ *${text.slice(0, 300)}* ❞\n\n**${targetLang.name}**\n${translated}`).setFooter({ text: `${detected ? `Detected: ${detected} • ` : ''}In loving memory of Storm 🐾` }).setTimestamp();
+        return i.editReply({ embeds: [embed] });
+    }
+    if (i.commandName === 'Detect Language') {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const d = await c.translation.detect(text);
+        const l = findLanguage(d.language);
+        return i.editReply({ content: `🔍 **Detected Language:** ${l?.name ?? d.language} (${d.language})${d.confidence !== undefined ? ` — ${Math.round(d.confidence * 100)}% confidence` : ''}` });
+    }
 }
 //# sourceMappingURL=index.js.map

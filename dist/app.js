@@ -1,5 +1,5 @@
 import { ActivityType, Client, Events, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
-import { autocomplete, executeCommand } from './bot/commands/index.js';
+import { autocomplete, executeCommand, executeContextMenu } from './bot/commands/index.js';
 import { onMessage, onMessageDelete, onMessageUpdate } from './services/discord/automatic-translation.js';
 import { onReaction } from './services/discord/reactions.js';
 import { logger } from './utils/logger.js';
@@ -9,6 +9,8 @@ export function registerEvents(c) { c.client.once(Events.ClientReady, client => 
         await autocomplete(i);
     else if (i.isChatInputCommand())
         await executeCommand(i, c);
+    else if (i.isMessageContextMenuCommand())
+        await executeContextMenu(i, c);
 }
 catch (e) {
     logger.error({ error: e instanceof Error ? e.message : 'unknown' }, 'Interaction failed');
