@@ -2,6 +2,7 @@ import { ApplicationCommandType,ApplicationIntegrationType,AttachmentBuilder,Cha
 import type { AppContext } from '../../app.js';
 import { findLanguage,languages,searchLanguages } from '../../config/languages.js';
 import { splitMessage } from '../../utils/message-splitter.js';
+import { transcribeAudio } from '../../services/audio/transcription.js';
 
 export const STATUS_MESSAGES = [
   'Online, active, and keeping our channels connected in memory of Storm ❤️',
@@ -60,8 +61,10 @@ const builders:any[]=[
  userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
  userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
  userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o=>o.setName('text').setDescription('Text to speak').setRequired(true)),'language',false)),
+ userApp(lang(new SlashCommandBuilder().setName('transcribe').setDescription('Convert voice note or audio file to text').addAttachmentOption(o=>o.setName('audio').setDescription('Audio or voice file to transcribe').setRequired(true)),'translate',false).addBooleanOption((o:any)=>o.setName('private').setDescription('Only you can see the result'))),
  userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
- userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message))
+ userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message)),
+ userApp(new ContextMenuCommandBuilder().setName('Transcribe Audio').setType(ApplicationCommandType.Message))
 ];
 
 export const commandData=builders.map(x=>x.toJSON());
@@ -94,7 +97,7 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
  if(n==='stats'){const guildId=requireGuild(i),now=new Date(),day=new Date(now.getFullYear(),now.getMonth(),now.getDate()),month=new Date(now.getFullYear(),now.getMonth(),1),[rows,batches]=await Promise.all([c.db.translationUsage.findMany({where:{guildId,createdAt:{gte:month}}}),c.db.translationBatchUsage.findMany({where:{guildId,createdAt:{gte:month}}})]);const success=rows.filter(x=>x.success),by=(p:string)=>success.filter(x=>x.provider===p).length,today=batches.filter(x=>x.createdAt>=day),requests=today.reduce((sum,x)=>sum+Object.values(x.providerRequests as Record<string,number>).reduce((a,n)=>a+n,0),0),produced=today.reduce((sum,x)=>sum+x.producedLanguages,0),cacheHits=today.reduce((sum,x)=>sum+x.cacheHits,0);return i.reply({content:`Translations today: ${rows.filter(x=>x.createdAt>=day).length}\nTranslations this month: ${rows.length}\nSuccessful translations: ${success.length}\nFailed translations: ${rows.length-success.length}\nGemini translations: ${by('gemini')}\nGroq translations: ${by('groq')}\nGoogle Translate translations: ${by('google')}\nCache hits: ${success.filter(x=>x.cached).length}\nAverage latency: ${success.length?Math.round(success.reduce((a,x)=>a+x.latencyMs,0)/success.length):0} ms\nCharacters translated: ${success.reduce((a,x)=>a+x.characters,0)}\nProvider API requests today: ${requests}\nTranslations produced today: ${produced}\nAverage languages per provider request: ${requests?(produced/requests).toFixed(1):'0'}\nBatch cache hit rate: ${produced+cacheHits?Math.round(cacheHits/(produced+cacheHits)*100):0}%`,ephemeral:true});}
  if(n==='status'){const msg=STATUS_MESSAGES[Math.floor(Math.random()*STATUS_MESSAGES.length)]!;const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🐾  Storm Translator  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(`> ❝ *${msg}* ❞\n\n・ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ ・\n✨ *Always watching over our server conversations* 💕`).setFooter({text:'Forever loved, forever our good companion 🐾 ˖⁺‧₊˚',iconURL:c.client.user?.displayAvatarURL()}).setTimestamp();return i.reply({embeds:[embed]});}
  if(n==='diagnostics'){const hs=(p:'gemini'|'groq'|'google')=>c.translation.health.status(p,!!c.translation.providers.find(x=>x.name===p)?.isConfigured());return i.reply({content:`🌐 Translator Bot Diagnostics\n\nBot status: Online.\nDiscord gateway: ${c.client.isReady()?'Connected':'Reconnecting'}.\nHosting environment: Wispbyte.\nWispbyte bot process: Healthy.\nGemini provider: ${hs('gemini')}.\nGroq provider: ${hs('groq')}.\nGoogle Translate provider: ${hs('google')}.\nTranslation fallback order: Gemini → Groq → Google Translate.\nDatabase: Connected to Neon PostgreSQL.\nTranslation cache: ${c.env.ENABLE_TRANSLATION_CACHE?'Enabled':'Disabled'}.\nTranslation queue: ${c.translation.queue.size} request(s) waiting.\nAutomatic translation: Running.\nFlag-reaction translation: Running.\nWebhook mirroring: Ready.\nUptime: ${Math.floor(process.uptime())} seconds.\nVersion: ${c.env.BOT_VERSION}.\nThe bot is ready to translate messages.`,ephemeral:true});}
-  else if(n==='version')await i.reply({content:`Translator Bot version ${c.env.BOT_VERSION}`,ephemeral:true});else if(n==='invite')await i.reply({content:`https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`,ephemeral:true});else if(n==='help')await i.reply({embeds:[new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation**\n/translate /detect /transliterate /languages /tts\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')],ephemeral:true});else if(n==='tts'){
+  else if(n==='version')await i.reply({content:`Translator Bot version ${c.env.BOT_VERSION}`,ephemeral:true});else if(n==='invite')await i.reply({content:`https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`,ephemeral:true});else if(n==='help')await i.reply({embeds:[new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')],ephemeral:true});else if(n==='tts'){
    await i.deferReply({flags:MessageFlags.Ephemeral});
    const text=i.options.getString('text',true);
    if(!text.trim())return i.editReply('Please provide text to convert to speech.');
@@ -117,14 +120,88 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
    }catch(err:any){
     return i.editReply(`Failed to generate speech audio: ${err.message}`);
    }
+  }else if(n==='transcribe'){
+   await i.deferReply({ephemeral:i.options.getBoolean('private')??true});
+   const attachment=i.options.getAttachment('audio',true);
+   const mime=attachment.contentType??'audio/ogg';
+   const isAudio=mime.startsWith('audio/')||/\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(attachment.name);
+   if(!isAudio)return i.editReply('❌ The attached file is not a recognized audio format.');
+   try{
+    const res=await fetch(attachment.url);
+    if(!res.ok)throw new Error(`Failed to download audio file (${res.status})`);
+    const buf=Buffer.from(await res.arrayBuffer());
+    const result=await transcribeAudio(buf,mime,attachment.name,c.env);
+    const detected=result.language?(findLanguage(result.language)?.name??result.language):undefined;
+    const dur=result.durationSeconds?`${result.durationSeconds}s`:undefined;
+    const translateOpt=i.options.getString('translate');
+    let translated:string|undefined,targetName:string|undefined;
+    if(translateOpt){
+     const targetLang=parseLang(translateOpt);
+     targetName=targetLang.name;
+     const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
+     const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
+     translated=tr.translations.get(targetLang.code)?.translatedText;
+    }
+    const descParts=[`> ❝ *${result.text.slice(0,3000)}* ❞`];
+    if(translated&&targetName)descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0,3000)}`);
+    const meta:string[]=[];
+    if(detected)meta.push(`Language: ${detected}`);
+    if(dur)meta.push(`Duration: ${dur}`);
+    meta.push('In memory of Storm 🐾');
+    const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🎙️  Speech-to-Text Transcription  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(descParts.join('\n')).setFooter({text:meta.join(' • ')}).setTimestamp();
+    return i.editReply({embeds:[embed]});
+   }catch(err:any){
+    return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
+   }
   }
  }
 
 export async function executeContextMenu(i:MessageContextMenuCommandInteraction,c:AppContext){
- const g=i.guildId,text=i.targetMessage.content;
- if(!text||!text.trim())return i.reply({content:'That message does not contain any text to translate.',flags:MessageFlags.Ephemeral});
+ const g=i.guildId;
  const banned=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;
  if(banned?.banned)throw new Error('You are not permitted to use translation features.');
+
+ if(i.commandName==='Transcribe Audio'){
+  await i.deferReply({flags:MessageFlags.Ephemeral});
+  const audioAttachment=i.targetMessage.attachments.find(a=>a.contentType?.startsWith('audio/')||/\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(a.name));
+  if(!audioAttachment)return i.editReply('❌ That message does not have an audio file or voice message attached.');
+  try{
+   const res=await fetch(audioAttachment.url);
+   if(!res.ok)throw new Error(`Failed to download audio (${res.status})`);
+   const buf=Buffer.from(await res.arrayBuffer());
+   const mime=audioAttachment.contentType??'audio/ogg';
+   const result=await transcribeAudio(buf,mime,audioAttachment.name,c.env);
+   const detected=result.language?(findLanguage(result.language)?.name??result.language):undefined;
+   const dur=result.durationSeconds?`${result.durationSeconds}s`:undefined;
+   const userRule=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;
+   const guildSettings=g?await(c.settingsCache?c.settingsCache.getGuildSettings(g):c.db.guildSettings.findUnique({where:{guildId:g}})):null;
+   const targetCode=userRule?.autoLanguage??(g?guildSettings?.defaultLanguage:null);
+   let translated:string|undefined,targetName:string|undefined;
+   if(targetCode&&(!result.language||!result.language.toLowerCase().startsWith(targetCode.toLowerCase().split('-')[0]!))){
+    const targetLang=findLanguage(targetCode);
+    if(targetLang){
+     targetName=targetLang.name;
+     const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
+     const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
+     translated=tr.translations.get(targetLang.code)?.translatedText;
+    }
+   }
+   const descParts=[`> ❝ *${result.text.slice(0,3000)}* ❞`];
+   if(translated&&targetName)descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0,3000)}`);
+   const meta:string[]=[];
+   if(detected)meta.push(`Language: ${detected}`);
+   if(dur)meta.push(`Duration: ${dur}`);
+   meta.push('In memory of Storm 🐾');
+   const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🎙️  Speech-to-Text Transcription  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(descParts.join('\n')).setFooter({text:meta.join(' • ')}).setTimestamp();
+   return i.editReply({embeds:[embed]});
+  }catch(err:any){
+   return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
+  }
+ }
+
+ const text=i.targetMessage.content;
+ if(!text||!text.trim())return i.reply({content:'That message does not contain any text to translate.',flags:MessageFlags.Ephemeral});
+
  if(i.commandName==='Translate Message'){
   await i.deferReply({flags:MessageFlags.Ephemeral});
   const userRule=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;

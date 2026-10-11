@@ -1,6 +1,7 @@
 import { ApplicationCommandType, ApplicationIntegrationType, AttachmentBuilder, ContextMenuCommandBuilder, EmbedBuilder, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, userMention, channelMention } from 'discord.js';
 import { findLanguage, languages, searchLanguages } from '../../config/languages.js';
 import { splitMessage } from '../../utils/message-splitter.js';
+import { transcribeAudio } from '../../services/audio/transcription.js';
 export const STATUS_MESSAGES = [
     'Online, active, and keeping our channels connected in memory of Storm ❤️',
     'Good dogs leave paw prints on our hearts forever. Ready to translate!',
@@ -57,8 +58,10 @@ const builders = [
     userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
     userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
     userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o => o.setName('text').setDescription('Text to speak').setRequired(true)), 'language', false)),
+    userApp(lang(new SlashCommandBuilder().setName('transcribe').setDescription('Convert voice note or audio file to text').addAttachmentOption(o => o.setName('audio').setDescription('Audio or voice file to transcribe').setRequired(true)), 'translate', false).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result'))),
     userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
-    userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message))
+    userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message)),
+    userApp(new ContextMenuCommandBuilder().setName('Transcribe Audio').setType(ApplicationCommandType.Message))
 ];
 export const commandData = builders.map(x => x.toJSON());
 const requireGuild = (i) => { if (!i.guildId)
@@ -246,7 +249,7 @@ export async function executeCommand(i, c) {
     else if (n === 'invite')
         await i.reply({ content: `https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`, ephemeral: true });
     else if (n === 'help')
-        await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation**\n/translate /detect /transliterate /languages /tts\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
+        await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
     else if (n === 'tts') {
         await i.deferReply({ flags: MessageFlags.Ephemeral });
         const text = i.options.getString('text', true);
@@ -286,14 +289,98 @@ export async function executeCommand(i, c) {
             return i.editReply(`Failed to generate speech audio: ${err.message}`);
         }
     }
+    else if (n === 'transcribe') {
+        await i.deferReply({ ephemeral: i.options.getBoolean('private') ?? true });
+        const attachment = i.options.getAttachment('audio', true);
+        const mime = attachment.contentType ?? 'audio/ogg';
+        const isAudio = mime.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(attachment.name);
+        if (!isAudio)
+            return i.editReply('❌ The attached file is not a recognized audio format.');
+        try {
+            const res = await fetch(attachment.url);
+            if (!res.ok)
+                throw new Error(`Failed to download audio file (${res.status})`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            const result = await transcribeAudio(buf, mime, attachment.name, c.env);
+            const detected = result.language ? (findLanguage(result.language)?.name ?? result.language) : undefined;
+            const dur = result.durationSeconds ? `${result.durationSeconds}s` : undefined;
+            const translateOpt = i.options.getString('translate');
+            let translated, targetName;
+            if (translateOpt) {
+                const targetLang = parseLang(translateOpt);
+                targetName = targetLang.name;
+                const terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
+                const tr = await c.translation.translateMany({ text: result.text, targetLanguages: [targetLang.code], protectedTerms: terms, guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
+                translated = tr.translations.get(targetLang.code)?.translatedText;
+            }
+            const descParts = [`> ❝ *${result.text.slice(0, 3000)}* ❞`];
+            if (translated && targetName)
+                descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0, 3000)}`);
+            const meta = [];
+            if (detected)
+                meta.push(`Language: ${detected}`);
+            if (dur)
+                meta.push(`Duration: ${dur}`);
+            meta.push('In memory of Storm 🐾');
+            const embed = new EmbedBuilder().setColor(0xFF94B8).setAuthor({ name: '🎙️  Speech-to-Text Transcription  ✨', iconURL: c.client.user?.displayAvatarURL() }).setDescription(descParts.join('\n')).setFooter({ text: meta.join(' • ') }).setTimestamp();
+            return i.editReply({ embeds: [embed] });
+        }
+        catch (err) {
+            return i.editReply(`❌ Audio transcription failed: ${err.message || 'Unknown error'}`);
+        }
+    }
 }
 export async function executeContextMenu(i, c) {
-    const g = i.guildId, text = i.targetMessage.content;
-    if (!text || !text.trim())
-        return i.reply({ content: 'That message does not contain any text to translate.', flags: MessageFlags.Ephemeral });
+    const g = i.guildId;
     const banned = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
     if (banned?.banned)
         throw new Error('You are not permitted to use translation features.');
+    if (i.commandName === 'Transcribe Audio') {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const audioAttachment = i.targetMessage.attachments.find(a => a.contentType?.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(a.name));
+        if (!audioAttachment)
+            return i.editReply('❌ That message does not have an audio file or voice message attached.');
+        try {
+            const res = await fetch(audioAttachment.url);
+            if (!res.ok)
+                throw new Error(`Failed to download audio (${res.status})`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            const mime = audioAttachment.contentType ?? 'audio/ogg';
+            const result = await transcribeAudio(buf, mime, audioAttachment.name, c.env);
+            const detected = result.language ? (findLanguage(result.language)?.name ?? result.language) : undefined;
+            const dur = result.durationSeconds ? `${result.durationSeconds}s` : undefined;
+            const userRule = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
+            const guildSettings = g ? await (c.settingsCache ? c.settingsCache.getGuildSettings(g) : c.db.guildSettings.findUnique({ where: { guildId: g } })) : null;
+            const targetCode = userRule?.autoLanguage ?? (g ? guildSettings?.defaultLanguage : null);
+            let translated, targetName;
+            if (targetCode && (!result.language || !result.language.toLowerCase().startsWith(targetCode.toLowerCase().split('-')[0]))) {
+                const targetLang = findLanguage(targetCode);
+                if (targetLang) {
+                    targetName = targetLang.name;
+                    const terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
+                    const tr = await c.translation.translateMany({ text: result.text, targetLanguages: [targetLang.code], protectedTerms: terms, guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
+                    translated = tr.translations.get(targetLang.code)?.translatedText;
+                }
+            }
+            const descParts = [`> ❝ *${result.text.slice(0, 3000)}* ❞`];
+            if (translated && targetName)
+                descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0, 3000)}`);
+            const meta = [];
+            if (detected)
+                meta.push(`Language: ${detected}`);
+            if (dur)
+                meta.push(`Duration: ${dur}`);
+            meta.push('In memory of Storm 🐾');
+            const embed = new EmbedBuilder().setColor(0xFF94B8).setAuthor({ name: '🎙️  Speech-to-Text Transcription  ✨', iconURL: c.client.user?.displayAvatarURL() }).setDescription(descParts.join('\n')).setFooter({ text: meta.join(' • ') }).setTimestamp();
+            return i.editReply({ embeds: [embed] });
+        }
+        catch (err) {
+            return i.editReply(`❌ Audio transcription failed: ${err.message || 'Unknown error'}`);
+        }
+    }
+    const text = i.targetMessage.content;
+    if (!text || !text.trim())
+        return i.reply({ content: 'That message does not contain any text to translate.', flags: MessageFlags.Ephemeral });
     if (i.commandName === 'Translate Message') {
         await i.deferReply({ flags: MessageFlags.Ephemeral });
         const userRule = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
