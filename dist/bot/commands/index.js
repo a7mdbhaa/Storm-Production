@@ -2,6 +2,8 @@ import { ApplicationCommandType, ApplicationIntegrationType, AttachmentBuilder, 
 import { findLanguage, languages, searchLanguages } from '../../config/languages.js';
 import { splitMessage } from '../../utils/message-splitter.js';
 import { transcribeAudio } from '../../services/audio/transcription.js';
+import { generateSpeechAudio } from '../../services/audio/tts.js';
+import { voiceManager } from '../../services/voice/voice-manager.js';
 export const STATUS_MESSAGES = [
     'Online, active, and keeping our channels connected in memory of Storm ❤️',
     'Good dogs leave paw prints on our hearts forever. Ready to translate!',
@@ -60,6 +62,12 @@ const builders = [
     userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o => o.setName('text').setDescription('Text to speak').setRequired(true)), 'language', false).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result'))),
     userApp(lang(new SlashCommandBuilder().setName('transcribe').setDescription('Convert voice note or audio file to text').addAttachmentOption(o => o.setName('audio').setDescription('Audio or voice file to transcribe').setRequired(true)), 'translate', false).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result'))),
     userApp(lang(new SlashCommandBuilder().setName('my-language').setDescription('Set or view your personal translation language for DMs and servers'), 'language', false)),
+    new SlashCommandBuilder().setName('vc-join').setDescription('Join your voice channel for real-time live voice dubbing')
+        .addStringOption(o => o.setName('primary_language').setDescription('Language for participant 1 (e.g. English)').setAutocomplete(true))
+        .addStringOption(o => o.setName('secondary_language').setDescription('Language for participant 2 (e.g. Arabic)').setAutocomplete(true))
+        .addBooleanOption(o => o.setName('subtitles').setDescription('Send live transcription & translation subtitles in text chat (default: true)')),
+    new SlashCommandBuilder().setName('vc-leave').setDescription('Leave the voice channel and stop live voice dubbing'),
+    new SlashCommandBuilder().setName('vc-status').setDescription('Show live voice dubbing status and active languages'),
     userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
     userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message)),
     userApp(new ContextMenuCommandBuilder().setName('Transcribe Audio').setType(ApplicationCommandType.Message))
@@ -279,7 +287,7 @@ export async function executeCommand(i, c) {
     else if (n === 'invite')
         await i.reply({ content: `https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`, ephemeral: true });
     else if (n === 'help')
-        await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe /my-language\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
+        await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe /my-language\n**Live Voice Dubbing (VC)**\n/vc-join /vc-leave /vc-status\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
     else if (n === 'tts') {
         await i.deferReply({ ephemeral: i.options.getBoolean('private') ?? false });
         const text = i.options.getString('text', true);
@@ -307,11 +315,7 @@ export async function executeCommand(i, c) {
             }
         }
         try {
-            const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text.slice(0, 200))}&tl=${encodeURIComponent(langCode)}&client=tw-ob`;
-            const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-            if (!res.ok)
-                throw new Error(`TTS service status ${res.status}`);
-            const buf = Buffer.from(await res.arrayBuffer());
+            const buf = await generateSpeechAudio(text, langCode);
             const attachment = new AttachmentBuilder(buf, { name: `speech-${langCode}.mp3` });
             return i.editReply({ content: `🔊 **Text-to-Speech (${langName})**\n> ❝ *${text.slice(0, 200)}* ❞`, files: [attachment] });
         }
@@ -374,6 +378,64 @@ export async function executeCommand(i, c) {
                 return i.reply({ content: `🌐 You haven't set a personal translation language yet (defaulting to Discord language: **${discordLang?.name ?? 'English'}**).\nUse \`/my-language language:<your language>\` to set one!`, ephemeral: true });
             }
         }
+    }
+    else if (n === 'vc-join') {
+        const guildId = requireGuild(i);
+        const member = i.member;
+        const channel = member?.voice?.channel;
+        if (!channel) {
+            return i.reply({ content: '❌ You must be connected to a voice channel in this server to use `/vc-join`.', flags: MessageFlags.Ephemeral });
+        }
+        const permissions = channel.permissionsFor(c.client.user.id);
+        if (!permissions?.has(PermissionFlagsBits.Connect) || !permissions?.has(PermissionFlagsBits.Speak)) {
+            return i.reply({ content: '❌ Storm Translator requires **Connect** and **Speak** permissions in your voice channel.', flags: MessageFlags.Ephemeral });
+        }
+        await i.deferReply();
+        const userTarget = await resolveUserTargetLanguage(i.user.id, guildId, i.locale, c);
+        const primaryOpt = i.options.getString('primary_language');
+        const secondaryOpt = i.options.getString('secondary_language');
+        const subtitlesEnabled = i.options.getBoolean('subtitles') ?? true;
+        const primaryLang = primaryOpt ? parseLang(primaryOpt) : { code: 'en', name: 'English' };
+        const secondaryLang = secondaryOpt ? parseLang(secondaryOpt) : (userTarget.code !== primaryLang.code ? userTarget : { code: 'ar', name: 'Arabic' });
+        const vm = c.voiceManager ?? voiceManager;
+        await vm.join({
+            channel,
+            subtitlesChannel: i.channel,
+            primaryLang: { code: primaryLang.code, name: primaryLang.name },
+            secondaryLang: { code: secondaryLang.code, name: secondaryLang.name },
+            subtitlesEnabled,
+            context: c,
+        });
+        const embed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle('🎙️ Live Voice Dubbing Active!')
+            .setDescription(`Storm Translator joined **${channel.name}** to provide real-time 2-way speech dubbing.\n\n🗣️ **Language 1**: ${primaryLang.name} (\`${primaryLang.code}\`)\n🗣️ **Language 2**: ${secondaryLang.name} (\`${secondaryLang.code}\`)\n📝 **Subtitles**: ${subtitlesEnabled ? 'Enabled in this text channel' : 'Disabled'}\n\n✨ **How it works:**\n• Speak naturally into your microphone.\n• When Person 1 speaks **${primaryLang.name}**, Storm translates & speaks in **${secondaryLang.name}** out loud in the voice channel.\n• When Person 2 speaks **${secondaryLang.name}**, Storm translates & speaks in **${primaryLang.name}** out loud in the voice channel.\n• 100% free live voice dubbing!`)
+            .setFooter({ text: 'Run /vc-leave when done • Storm Translator 🐾' });
+        return i.editReply({ embeds: [embed] });
+    }
+    else if (n === 'vc-leave') {
+        const guildId = requireGuild(i);
+        const vm = c.voiceManager ?? voiceManager;
+        const stopped = vm.leave(guildId);
+        if (!stopped) {
+            return i.reply({ content: '❌ Storm Translator is not currently active in a voice channel in this server.', flags: MessageFlags.Ephemeral });
+        }
+        return i.reply({ content: '👋 Left the voice channel and stopped live voice dubbing session.' });
+    }
+    else if (n === 'vc-status') {
+        const guildId = requireGuild(i);
+        const vm = c.voiceManager ?? voiceManager;
+        const session = vm.getSession(guildId);
+        if (!session) {
+            return i.reply({ content: 'ℹ️ No active voice dubbing session in this server. Use `/vc-join` to start!', flags: MessageFlags.Ephemeral });
+        }
+        const mins = Math.floor((Date.now() - session.startedAt.getTime()) / 60000);
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('🎙️ Live Voice Dubbing Status')
+            .addFields({ name: 'Voice Channel', value: `<#${session.channelId}>`, inline: true }, { name: 'Session Duration', value: `${mins} min`, inline: true }, { name: 'Subtitles', value: session.subtitlesEnabled ? 'Enabled' : 'Disabled', inline: true }, { name: 'Language 1', value: `${session.primaryLang.name} (\`${session.primaryLang.code}\`)`, inline: true }, { name: 'Language 2', value: `${session.secondaryLang.name} (\`${session.secondaryLang.code}\`)`, inline: true }, { name: 'Audio State', value: session.isSpeaking ? '🔊 Speaking translation' : '👂 Listening for speech', inline: true })
+            .setFooter({ text: 'Run /vc-leave to end session • Storm Translator 🐾' });
+        return i.reply({ embeds: [embed] });
     }
 }
 export async function executeContextMenu(i, c) {

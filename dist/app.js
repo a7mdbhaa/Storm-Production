@@ -3,7 +3,7 @@ import { autocomplete, executeCommand, executeContextMenu } from './bot/commands
 import { onMessage, onMessageDelete, onMessageUpdate } from './services/discord/automatic-translation.js';
 import { onReaction } from './services/discord/reactions.js';
 import { logger } from './utils/logger.js';
-export function createClient() { return new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions], partials: [Partials.Message, Partials.Channel, Partials.Reaction] }); }
+export function createClient() { return new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.GuildVoiceStates], partials: [Partials.Message, Partials.Channel, Partials.Reaction] }); }
 export function registerEvents(c) { c.client.once(Events.ClientReady, client => { client.user.setActivity('multilingual conversations', { type: ActivityType.Watching }); logger.info({ guilds: client.guilds.cache.size }, 'Discord connected; bot ready'); }); c.client.on(Events.InteractionCreate, async (i) => { try {
     if (i.isAutocomplete())
         await autocomplete(i);
