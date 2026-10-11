@@ -72,6 +72,7 @@ export const commandData=builders.map(x=>x.toJSON());
 const requireGuild=(i:ChatInputCommandInteraction)=>{if(!i.guildId)throw new Error('This command is only available in servers.');return i.guildId;};
 const parseLang=(v:string)=>{const l=findLanguage(v);if(!l)throw new Error(`Unknown language: ${v}`);return l;};
 const ok=(i:ChatInputCommandInteraction,text:string)=>i.reply({content:`✅ ${text}`,ephemeral:true});
+const quote=(t:string)=>t.trim().split('\n').map(l=>`> ${l}`).join('\n');
 export async function resolveUserTargetLanguage(userId:string,guildId:string|null|undefined,locale:string,c:AppContext){
  if(guildId){
   const serverRule=c.settingsCache?await c.settingsCache.getUserRule(guildId,userId):await c.db.userRule.findUnique({where:{guildId_userId:{guildId,userId}}});
@@ -160,14 +161,12 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
      const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
      translated=tr.translations.get(targetLang.code)?.translatedText;
     }
-    const descParts=[`> ❝ *${result.text.slice(0,3000)}* ❞`];
-    if(translated&&targetName)descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0,3000)}`);
-    const meta:string[]=[];
-    if(detected)meta.push(`Language: ${detected}`);
-    if(dur)meta.push(`Duration: ${dur}`);
-    meta.push('In memory of Storm 🐾');
-    const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🎙️  Speech-to-Text Transcription  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(descParts.join('\n')).setFooter({text:meta.join(' • ')}).setTimestamp();
-    return i.editReply({embeds:[embed]});
+    const info=[detected,dur].filter(Boolean).join(' • ');
+    let out=`🎙️ **Transcription**${info?` *(${info})*`:''}\n${quote(result.text.slice(0,3000))}`;
+    if(translated&&targetName){
+     out+=`\n\n🌐 **Translation** *(${targetName})*\n${quote(translated.slice(0,3000))}`;
+    }
+    return i.editReply({content:out});
    }catch(err:any){
     return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
    }
@@ -217,14 +216,12 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
     const tr=await c.translation.translateMany({text:result.text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
     translated=tr.translations.get(targetLang.code)?.translatedText;
    }
-   const descParts=[`> ❝ *${result.text.slice(0,3000)}* ❞`];
-   if(translated&&targetName)descParts.push(`\n**Translation (${targetName})**\n${translated.slice(0,3000)}`);
-   const meta:string[]=[];
-   if(detected)meta.push(`Language: ${detected}`);
-   if(dur)meta.push(`Duration: ${dur}`);
-   meta.push('In memory of Storm 🐾');
-   const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🎙️  Speech-to-Text Transcription  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(descParts.join('\n')).setFooter({text:meta.join(' • ')}).setTimestamp();
-   return i.editReply({embeds:[embed]});
+   const info=[detected,dur].filter(Boolean).join(' • ');
+   let out=`🎙️ **Transcription**${info?` *(${info})*`:''}\n${quote(result.text.slice(0,3000))}`;
+   if(translated&&targetName){
+    out+=`\n\n🌐 **Translation** *(${targetName})*\n${quote(translated.slice(0,3000))}`;
+   }
+   return i.editReply({content:out});
   }catch(err:any){
    return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
   }
@@ -241,8 +238,8 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
   const translated=result.translations.get(targetLang.code)?.translatedText;
   if(!translated)return i.editReply('Translation unavailable.');
   const detected=result.sourceLanguage?(findLanguage(result.sourceLanguage)?.name??result.sourceLanguage):undefined;
-  const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🐾  Storm Translator  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(`> ❝ *${text.slice(0,300)}* ❞\n\n**${targetLang.name}**\n${translated}`).setFooter({text:`${detected?`Detected: ${detected} • `:''}In loving memory of Storm 🐾`}).setTimestamp();
-  return i.editReply({embeds:[embed]});
+  const src=detected?` • from ${detected}`:'';
+  return i.editReply({content:`🌐 **Translation** *(${targetLang.name}${src})*\n${quote(translated.slice(0,3000))}`});
  }
  if(i.commandName==='Detect Language'){
   await i.deferReply({flags:MessageFlags.Ephemeral});
