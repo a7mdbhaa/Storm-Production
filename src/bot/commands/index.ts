@@ -60,7 +60,7 @@ const builders:any[]=[
  userApp(new SlashCommandBuilder().setName('version').setDescription('Show bot version')),
  userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
  userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
- userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o=>o.setName('text').setDescription('Text to speak').setRequired(true)),'language',false)),
+ userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o=>o.setName('text').setDescription('Text to speak').setRequired(true)),'language',false).addBooleanOption((o:any)=>o.setName('private').setDescription('Only you can see the result'))),
  userApp(lang(new SlashCommandBuilder().setName('transcribe').setDescription('Convert voice note or audio file to text').addAttachmentOption(o=>o.setName('audio').setDescription('Audio or voice file to transcribe').setRequired(true)),'translate',false).addBooleanOption((o:any)=>o.setName('private').setDescription('Only you can see the result'))),
  userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
  userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message)),
@@ -98,7 +98,7 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
  if(n==='status'){const msg=STATUS_MESSAGES[Math.floor(Math.random()*STATUS_MESSAGES.length)]!;const embed=new EmbedBuilder().setColor(0xFF94B8).setAuthor({name:'🐾  Storm Translator  ✨',iconURL:c.client.user?.displayAvatarURL()}).setDescription(`> ❝ *${msg}* ❞\n\n・ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈ ・\n✨ *Always watching over our server conversations* 💕`).setFooter({text:'Forever loved, forever our good companion 🐾 ˖⁺‧₊˚',iconURL:c.client.user?.displayAvatarURL()}).setTimestamp();return i.reply({embeds:[embed]});}
  if(n==='diagnostics'){const hs=(p:'gemini'|'groq'|'google')=>c.translation.health.status(p,!!c.translation.providers.find(x=>x.name===p)?.isConfigured());return i.reply({content:`🌐 Translator Bot Diagnostics\n\nBot status: Online.\nDiscord gateway: ${c.client.isReady()?'Connected':'Reconnecting'}.\nHosting environment: Wispbyte.\nWispbyte bot process: Healthy.\nGemini provider: ${hs('gemini')}.\nGroq provider: ${hs('groq')}.\nGoogle Translate provider: ${hs('google')}.\nTranslation fallback order: Gemini → Groq → Google Translate.\nDatabase: Connected to Neon PostgreSQL.\nTranslation cache: ${c.env.ENABLE_TRANSLATION_CACHE?'Enabled':'Disabled'}.\nTranslation queue: ${c.translation.queue.size} request(s) waiting.\nAutomatic translation: Running.\nFlag-reaction translation: Running.\nWebhook mirroring: Ready.\nUptime: ${Math.floor(process.uptime())} seconds.\nVersion: ${c.env.BOT_VERSION}.\nThe bot is ready to translate messages.`,ephemeral:true});}
   else if(n==='version')await i.reply({content:`Translator Bot version ${c.env.BOT_VERSION}`,ephemeral:true});else if(n==='invite')await i.reply({content:`https://discord.com/oauth2/authorize?client_id=${c.env.DISCORD_CLIENT_ID}&scope=bot%20applications.commands&permissions=536946752`,ephemeral:true});else if(n==='help')await i.reply({embeds:[new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')],ephemeral:true});else if(n==='tts'){
-   await i.deferReply({flags:MessageFlags.Ephemeral});
+   await i.deferReply({ephemeral:i.options.getBoolean('private')??false});
    const text=i.options.getString('text',true);
    if(!text.trim())return i.editReply('Please provide text to convert to speech.');
    const langOpt=i.options.getString('language');
@@ -121,7 +121,7 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
     return i.editReply(`Failed to generate speech audio: ${err.message}`);
    }
   }else if(n==='transcribe'){
-   await i.deferReply({ephemeral:i.options.getBoolean('private')??true});
+   await i.deferReply({ephemeral:i.options.getBoolean('private')??false});
    const attachment=i.options.getAttachment('audio',true);
    const mime=attachment.contentType??'audio/ogg';
    const isAudio=mime.startsWith('audio/')||/\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(attachment.name);
@@ -162,7 +162,7 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
  if(banned?.banned)throw new Error('You are not permitted to use translation features.');
 
  if(i.commandName==='Transcribe Audio'){
-  await i.deferReply({flags:MessageFlags.Ephemeral});
+  await i.deferReply();
   const audioAttachment=i.targetMessage.attachments.find(a=>a.contentType?.startsWith('audio/')||/\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(a.name));
   if(!audioAttachment)return i.editReply('❌ That message does not have an audio file or voice message attached.');
   try{

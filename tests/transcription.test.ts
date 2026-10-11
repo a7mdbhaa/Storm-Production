@@ -20,6 +20,19 @@ describe('Speech-to-Text Transcription Commands', () => {
     expect(ctx?.integration_types).toEqual([0, 1]);
     expect(ctx?.contexts).toEqual([0, 1, 2]);
   });
+
+  it('registers /tts with user app integration types and private option', () => {
+    const cmd = commandData.find(c => c.name === 'tts');
+    expect(cmd).toBeDefined();
+    expect(cmd?.integration_types).toEqual([0, 1]);
+    expect(cmd?.contexts).toEqual([0, 1, 2]);
+    const textOpt = cmd?.options?.find((o: any) => o.name === 'text');
+    expect(textOpt).toBeDefined();
+    expect(textOpt?.required).toBe(true);
+    const privateOpt = cmd?.options?.find((o: any) => o.name === 'private');
+    expect(privateOpt).toBeDefined();
+    expect(privateOpt?.required).toBe(false);
+  });
 });
 
 describe('transcribeAudio service', () => {

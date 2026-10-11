@@ -57,7 +57,7 @@ const builders = [
     userApp(new SlashCommandBuilder().setName('version').setDescription('Show bot version')),
     userApp(new SlashCommandBuilder().setName('invite').setDescription('Get bot invite')),
     userApp(new SlashCommandBuilder().setName('help').setDescription('Show command help')),
-    userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o => o.setName('text').setDescription('Text to speak').setRequired(true)), 'language', false)),
+    userApp(lang(new SlashCommandBuilder().setName('tts').setDescription('Convert text to speech audio').addStringOption(o => o.setName('text').setDescription('Text to speak').setRequired(true)), 'language', false).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result'))),
     userApp(lang(new SlashCommandBuilder().setName('transcribe').setDescription('Convert voice note or audio file to text').addAttachmentOption(o => o.setName('audio').setDescription('Audio or voice file to transcribe').setRequired(true)), 'translate', false).addBooleanOption((o) => o.setName('private').setDescription('Only you can see the result'))),
     userApp(new ContextMenuCommandBuilder().setName('Translate Message').setType(ApplicationCommandType.Message)),
     userApp(new ContextMenuCommandBuilder().setName('Detect Language').setType(ApplicationCommandType.Message)),
@@ -251,7 +251,7 @@ export async function executeCommand(i, c) {
     else if (n === 'help')
         await i.reply({ embeds: [new EmbedBuilder().setTitle('Storm Translator Help').setDescription('**Translation & Audio**\n/translate /detect /transliterate /languages /tts /transcribe\n**Automatic Translation**\n/channel-language /channel-auto /channel-stop /user-auto /user-stop\n**Language Channels**\n/channel-link /channel-unlink /channel-groups /group-delete /group-rename\n**Reaction Translation**\nReact with a flag or 🌐; configure /reaction-mode\n**Administration**\n/server-settings /ignore-add /command-permissions\n**Information**\n/stats /status /diagnostics /version /invite')], ephemeral: true });
     else if (n === 'tts') {
-        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await i.deferReply({ ephemeral: i.options.getBoolean('private') ?? false });
         const text = i.options.getString('text', true);
         if (!text.trim())
             return i.editReply('Please provide text to convert to speech.');
@@ -290,7 +290,7 @@ export async function executeCommand(i, c) {
         }
     }
     else if (n === 'transcribe') {
-        await i.deferReply({ ephemeral: i.options.getBoolean('private') ?? true });
+        await i.deferReply({ ephemeral: i.options.getBoolean('private') ?? false });
         const attachment = i.options.getAttachment('audio', true);
         const mime = attachment.contentType ?? 'audio/ogg';
         const isAudio = mime.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(attachment.name);
@@ -336,7 +336,7 @@ export async function executeContextMenu(i, c) {
     if (banned?.banned)
         throw new Error('You are not permitted to use translation features.');
     if (i.commandName === 'Transcribe Audio') {
-        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await i.deferReply();
         const audioAttachment = i.targetMessage.attachments.find(a => a.contentType?.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(a.name));
         if (!audioAttachment)
             return i.editReply('❌ That message does not have an audio file or voice message attached.');
