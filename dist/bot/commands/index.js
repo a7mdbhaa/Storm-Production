@@ -79,6 +79,13 @@ const parseLang = (v) => { const l = findLanguage(v); if (!l)
     throw new Error(`Unknown language: ${v}`); return l; };
 const ok = (i, text) => i.reply({ content: `✅ ${text}`, ephemeral: true });
 const quote = (t) => t.trim().split('\n').map(l => `> ${l}`).join('\n');
+async function replyChunks(i, text, ephemeral = false) {
+    const chunks = splitMessage(text, 1950);
+    await i.editReply({ content: chunks[0] ?? 'Done.' });
+    for (let idx = 1; idx < chunks.length; idx++) {
+        await i.followUp({ content: chunks[idx], ...(ephemeral ? { flags: MessageFlags.Ephemeral } : {}) });
+    }
+}
 export async function resolveUserTargetLanguage(userId, guildId, locale, c) {
     if (guildId) {
         const serverRule = c.settingsCache ? await c.settingsCache.getUserRule(guildId, userId) : await c.db.userRule.findUnique({ where: { guildId_userId: { guildId, userId } } });
@@ -114,7 +121,8 @@ export async function executeCommand(i, c) {
     if (banned?.banned)
         throw new Error('You are not permitted to use translation features.');
     if (n === 'translate') {
-        await i.deferReply({ ephemeral: i.options.getBoolean('private') ?? true });
+        const priv = i.options.getBoolean('private') ?? true;
+        await i.deferReply({ ephemeral: priv });
         const targets = i.options.getString('language', true).split(',').map(parseLang).slice(0, c.env.MAX_TARGET_LANGUAGES), source = i.options.getString('from'), text = i.options.getString('text', true), terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
         const result = await c.translation.translateMany({ text, ...(source ? { sourceLanguage: parseLang(source).code } : {}), protectedTerms: terms, targetLanguages: targets.map(x => x.code), guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
         if (g) {
@@ -122,8 +130,7 @@ export async function executeCommand(i, c) {
             void c.db.translationBatchUsage.create({ data: { guildId: g, providerRequests: result.providerRequests, requestedLanguages: targets.length, producedLanguages: result.translations.size, cacheHits: [...result.translations.values()].filter(x => x.cached).length, fallbackOccurred: result.providerRequests.groq + result.providerRequests.google > 0, partialFallback: result.translations.size > 0 && requests > 1, characters: text.length, totalLatencyMs: result.totalLatencyMs } }).catch(() => undefined);
         }
         const parts = targets.map(target => `**${target.name}**\n${result.translations.get(target.code)?.translatedText ?? 'Unavailable'}`);
-        await i.editReply(parts.join('\n\n'));
-        return;
+        return replyChunks(i, parts.join('\n\n'), priv);
     }
     if (n === 'detect') {
         const d = await c.translation.detect(i.options.getString('text', true)), l = findLanguage(d.language);
@@ -350,11 +357,11 @@ export async function executeCommand(i, c) {
                 translated = tr.translations.get(targetLang.code)?.translatedText;
             }
             const info = [detected, dur].filter(Boolean).join(' • ');
-            let out = `🎙️ **Transcription**${info ? ` *(${info})*` : ''}\n${quote(result.text.slice(0, 3000))}`;
+            let out = `🎙️ **Transcription**${info ? ` *(${info})*` : ''}\n${quote(result.text)}`;
             if (translated && targetName) {
-                out += `\n\n🌐 **Translation** *(${targetName})*\n${quote(translated.slice(0, 3000))}`;
+                out += `\n\n🌐 **Translation** *(${targetName})*\n${quote(translated)}`;
             }
-            return i.editReply({ content: out });
+            return replyChunks(i, out, i.options.getBoolean('private') ?? false);
         }
         catch (err) {
             return i.editReply(`❌ Audio transcription failed: ${err.message || 'Unknown error'}`);
@@ -468,11 +475,11 @@ export async function executeContextMenu(i, c) {
                 translated = tr.translations.get(targetLang.code)?.translatedText;
             }
             const info = [detected, dur].filter(Boolean).join(' • ');
-            let out = `🎙️ **Transcription**${info ? ` *(${info})*` : ''}\n${quote(result.text.slice(0, 3000))}`;
+            let out = `🎙️ **Transcription**${info ? ` *(${info})*` : ''}\n${quote(result.text)}`;
             if (translated && targetName) {
-                out += `\n\n🌐 **Translation** *(${targetName})*\n${quote(translated.slice(0, 3000))}`;
+                out += `\n\n🌐 **Translation** *(${targetName})*\n${quote(translated)}`;
             }
-            return i.editReply({ content: out });
+            return replyChunks(i, out, false);
         }
         catch (err) {
             return i.editReply(`❌ Audio transcription failed: ${err.message || 'Unknown error'}`);
@@ -491,7 +498,7 @@ export async function executeContextMenu(i, c) {
             return i.editReply('Translation unavailable.');
         const detected = result.sourceLanguage ? (findLanguage(result.sourceLanguage)?.name ?? result.sourceLanguage) : undefined;
         const src = detected ? ` • from ${detected}` : '';
-        return i.editReply({ content: `🌐 **Translation** *(${targetLang.name}${src})*\n${quote(translated.slice(0, 3000))}` });
+        return replyChunks(i, `🌐 **Translation** *(${targetLang.name}${src})*\n${quote(translated)}`, true);
     }
     if (i.commandName === 'Detect Language') {
         await i.deferReply({ flags: MessageFlags.Ephemeral });

@@ -81,6 +81,13 @@ const requireGuild=(i:ChatInputCommandInteraction)=>{if(!i.guildId)throw new Err
 const parseLang=(v:string)=>{const l=findLanguage(v);if(!l)throw new Error(`Unknown language: ${v}`);return l;};
 const ok=(i:ChatInputCommandInteraction,text:string)=>i.reply({content:`✅ ${text}`,ephemeral:true});
 const quote=(t:string)=>t.trim().split('\n').map(l=>`> ${l}`).join('\n');
+async function replyChunks(i:ChatInputCommandInteraction|MessageContextMenuCommandInteraction,text:string,ephemeral=false){
+ const chunks=splitMessage(text,1950);
+ await i.editReply({content:chunks[0]??'Done.'});
+ for(let idx=1;idx<chunks.length;idx++){
+  await i.followUp({content:chunks[idx]!,...(ephemeral?{flags:MessageFlags.Ephemeral}:{})});
+ }
+}
 export async function resolveUserTargetLanguage(userId:string,guildId:string|null|undefined,locale:string,c:AppContext){
  if(guildId){
   const serverRule=c.settingsCache?await c.settingsCache.getUserRule(guildId,userId):await c.db.userRule.findUnique({where:{guildId_userId:{guildId,userId}}});
@@ -100,7 +107,7 @@ export async function resolveUserTargetLanguage(userId:string,guildId:string|nul
 export async function autocomplete(i:any){const q=i.options.getFocused();await i.respond(searchLanguages(q).map(l=>({name:`${l.name} — ${l.nativeName} (${l.code})`.slice(0,100),value:l.code})));}
 
 export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext){const n=i.commandName,g=i.guildId;const banned=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;if(banned?.banned)throw new Error('You are not permitted to use translation features.');
- if(n==='translate'){await i.deferReply({ephemeral:i.options.getBoolean('private')??true});const targets=i.options.getString('language',true).split(',').map(parseLang).slice(0,c.env.MAX_TARGET_LANGUAGES),source=i.options.getString('from'),text=i.options.getString('text',true),terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];const result=await c.translation.translateMany({text,...(source?{sourceLanguage:parseLang(source).code}:{}),protectedTerms:terms,targetLanguages:targets.map(x=>x.code),guildId:g??undefined,channelId:i.channelId,userId:i.user.id});if(g){const requests=Object.values(result.providerRequests).reduce((a,n)=>a+n,0);void c.db.translationBatchUsage.create({data:{guildId:g,providerRequests:result.providerRequests,requestedLanguages:targets.length,producedLanguages:result.translations.size,cacheHits:[...result.translations.values()].filter(x=>x.cached).length,fallbackOccurred:result.providerRequests.groq+result.providerRequests.google>0,partialFallback:result.translations.size>0&&requests>1,characters:text.length,totalLatencyMs:result.totalLatencyMs}}).catch(()=>undefined);}const parts=targets.map(target=>`**${target.name}**\n${result.translations.get(target.code)?.translatedText??'Unavailable'}`);await i.editReply(parts.join('\n\n'));return;}
+ if(n==='translate'){const priv=i.options.getBoolean('private')??true;await i.deferReply({ephemeral:priv});const targets=i.options.getString('language',true).split(',').map(parseLang).slice(0,c.env.MAX_TARGET_LANGUAGES),source=i.options.getString('from'),text=i.options.getString('text',true),terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];const result=await c.translation.translateMany({text,...(source?{sourceLanguage:parseLang(source).code}:{}),protectedTerms:terms,targetLanguages:targets.map(x=>x.code),guildId:g??undefined,channelId:i.channelId,userId:i.user.id});if(g){const requests=Object.values(result.providerRequests).reduce((a,n)=>a+n,0);void c.db.translationBatchUsage.create({data:{guildId:g,providerRequests:result.providerRequests,requestedLanguages:targets.length,producedLanguages:result.translations.size,cacheHits:[...result.translations.values()].filter(x=>x.cached).length,fallbackOccurred:result.providerRequests.groq+result.providerRequests.google>0,partialFallback:result.translations.size>0&&requests>1,characters:text.length,totalLatencyMs:result.totalLatencyMs}}).catch(()=>undefined);}const parts=targets.map(target=>`**${target.name}**\n${result.translations.get(target.code)?.translatedText??'Unavailable'}`);return replyChunks(i,parts.join('\n\n'),priv);}
  if(n==='detect'){const d=await c.translation.detect(i.options.getString('text',true)),l=findLanguage(d.language);await i.reply({content:`Detected language: ${l?.name??d.language} (${d.language})${d.confidence!==undefined?` — ${Math.round(d.confidence*100)}% confidence`:''}`,ephemeral:true});return;}
  if(n==='transliterate'){await i.deferReply({ephemeral:true});await i.editReply(await c.translation.transliterate(i.options.getString('text',true),i.options.getString('script',true)));return;}
  if(n==='languages'){const q=i.options.getString('search')??'',list=q?searchLanguages(q,100):languages;await i.reply({content:splitMessage(list.map(l=>`${l.name} — ${l.nativeName} — ${l.code}`).join('\n'))[0],ephemeral:true});return;}
@@ -167,11 +174,11 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
      translated=tr.translations.get(targetLang.code)?.translatedText;
     }
     const info=[detected,dur].filter(Boolean).join(' • ');
-    let out=`🎙️ **Transcription**${info?` *(${info})*`:''}\n${quote(result.text.slice(0,3000))}`;
+    let out=`🎙️ **Transcription**${info?` *(${info})*`:''}\n${quote(result.text)}`;
     if(translated&&targetName){
-     out+=`\n\n🌐 **Translation** *(${targetName})*\n${quote(translated.slice(0,3000))}`;
+     out+=`\n\n🌐 **Translation** *(${targetName})*\n${quote(translated)}`;
     }
-    return i.editReply({content:out});
+    return replyChunks(i,out,i.options.getBoolean('private')??false);
    }catch(err:any){
     return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
    }
@@ -284,11 +291,11 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
     translated=tr.translations.get(targetLang.code)?.translatedText;
    }
    const info=[detected,dur].filter(Boolean).join(' • ');
-   let out=`🎙️ **Transcription**${info?` *(${info})*`:''}\n${quote(result.text.slice(0,3000))}`;
+   let out=`🎙️ **Transcription**${info?` *(${info})*`:''}\n${quote(result.text)}`;
    if(translated&&targetName){
-    out+=`\n\n🌐 **Translation** *(${targetName})*\n${quote(translated.slice(0,3000))}`;
+    out+=`\n\n🌐 **Translation** *(${targetName})*\n${quote(translated)}`;
    }
-   return i.editReply({content:out});
+   return replyChunks(i,out,false);
   }catch(err:any){
    return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
   }
@@ -306,7 +313,7 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
   if(!translated)return i.editReply('Translation unavailable.');
   const detected=result.sourceLanguage?(findLanguage(result.sourceLanguage)?.name??result.sourceLanguage):undefined;
   const src=detected?` • from ${detected}`:'';
-  return i.editReply({content:`🌐 **Translation** *(${targetLang.name}${src})*\n${quote(translated.slice(0,3000))}`});
+  return replyChunks(i,`🌐 **Translation** *(${targetLang.name}${src})*\n${quote(translated)}`,true);
  }
  if(i.commandName==='Detect Language'){
   await i.deferReply({flags:MessageFlags.Ephemeral});
