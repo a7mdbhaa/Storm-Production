@@ -87,6 +87,12 @@ async function replyChunks(i, text, ephemeral = false) {
     }
 }
 export async function resolveUserTargetLanguage(userId, guildId, locale, c) {
+    const globalRule = await c.db.userRule.findUnique({ where: { guildId_userId: { guildId: 'global', userId } } }).catch(() => null);
+    if (globalRule?.autoLanguage) {
+        const l = findLanguage(globalRule.autoLanguage);
+        if (l)
+            return l;
+    }
     if (guildId) {
         const serverRule = c.settingsCache ? await c.settingsCache.getUserRule(guildId, userId) : await c.db.userRule.findUnique({ where: { guildId_userId: { guildId, userId } } });
         if (serverRule?.autoLanguage) {
@@ -94,12 +100,6 @@ export async function resolveUserTargetLanguage(userId, guildId, locale, c) {
             if (l)
                 return l;
         }
-    }
-    const globalRule = await c.db.userRule.findUnique({ where: { guildId_userId: { guildId: 'global', userId } } }).catch(() => null);
-    if (globalRule?.autoLanguage) {
-        const l = findLanguage(globalRule.autoLanguage);
-        if (l)
-            return l;
     }
     if (guildId) {
         const guildSettings = c.settingsCache ? await c.settingsCache.getGuildSettings(guildId) : await c.db.guildSettings.findUnique({ where: { guildId } });
@@ -343,24 +343,19 @@ export async function executeCommand(i, c) {
                 throw new Error(`Failed to download audio file (${res.status})`);
             const buf = Buffer.from(await res.arrayBuffer());
             const result = await transcribeAudio(buf, mime, attachment.name, c.env);
-            const detected = result.language ? (findLanguage(result.language)?.name ?? result.language) : undefined;
             const dur = result.durationSeconds ? `${result.durationSeconds}s` : undefined;
             const translateOpt = i.options.getString('translate');
             const targetLang = translateOpt ? parseLang(translateOpt) : await resolveUserTargetLanguage(i.user.id, g, i.locale, c);
             const detectedBase = (result.language || '').toLowerCase().split(/[-_]/)[0];
             const targetBase = targetLang.code.toLowerCase().split(/[-_]/)[0];
-            let translated, targetName;
-            if (translateOpt || (detectedBase && targetBase && detectedBase !== targetBase)) {
-                targetName = targetLang.name;
+            let finalText = result.text;
+            if (!detectedBase || detectedBase !== targetBase) {
                 const terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
                 const tr = await c.translation.translateMany({ text: result.text, targetLanguages: [targetLang.code], protectedTerms: terms, guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
-                translated = tr.translations.get(targetLang.code)?.translatedText;
+                finalText = tr.translations.get(targetLang.code)?.translatedText ?? result.text;
             }
-            const info = [detected, dur].filter(Boolean).join(' • ');
-            let out = `🎙️ **Transcription**${info ? ` *(${info})*` : ''}\n${quote(result.text)}`;
-            if (translated && targetName) {
-                out += `\n\n🌐 **Translation** *(${targetName})*\n${quote(translated)}`;
-            }
+            const info = [targetLang.name, dur].filter(Boolean).join(' • ');
+            const out = `🎙️ **Transcription** *(${info})*\n${quote(finalText)}`;
             return replyChunks(i, out, i.options.getBoolean('private') ?? false);
         }
         catch (err) {
@@ -462,23 +457,18 @@ export async function executeContextMenu(i, c) {
             const buf = Buffer.from(await res.arrayBuffer());
             const mime = audioAttachment.contentType ?? 'audio/ogg';
             const result = await transcribeAudio(buf, mime, audioAttachment.name, c.env);
-            const detected = result.language ? (findLanguage(result.language)?.name ?? result.language) : undefined;
             const dur = result.durationSeconds ? `${result.durationSeconds}s` : undefined;
             const targetLang = await resolveUserTargetLanguage(i.user.id, g, i.locale, c);
             const detectedBase = (result.language || '').toLowerCase().split(/[-_]/)[0];
             const targetBase = targetLang.code.toLowerCase().split(/[-_]/)[0];
-            let translated, targetName;
-            if (detectedBase && targetBase && detectedBase !== targetBase) {
-                targetName = targetLang.name;
+            let finalText = result.text;
+            if (!detectedBase || detectedBase !== targetBase) {
                 const terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
                 const tr = await c.translation.translateMany({ text: result.text, targetLanguages: [targetLang.code], protectedTerms: terms, guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
-                translated = tr.translations.get(targetLang.code)?.translatedText;
+                finalText = tr.translations.get(targetLang.code)?.translatedText ?? result.text;
             }
-            const info = [detected, dur].filter(Boolean).join(' • ');
-            let out = `🎙️ **Transcription**${info ? ` *(${info})*` : ''}\n${quote(result.text)}`;
-            if (translated && targetName) {
-                out += `\n\n🌐 **Translation** *(${targetName})*\n${quote(translated)}`;
-            }
+            const info = [targetLang.name, dur].filter(Boolean).join(' • ');
+            const out = `🎙️ **Transcription** *(${info})*\n${quote(finalText)}`;
             return replyChunks(i, out, false);
         }
         catch (err) {
