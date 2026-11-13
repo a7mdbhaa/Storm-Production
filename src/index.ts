@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createServer } from 'node:http';
 import { loadEnv } from './config/env.js';
 import { prisma,withDbRetry } from './database/prisma.js';
 import { createClient,registerEvents } from './app.js';
@@ -12,6 +13,9 @@ import { voiceManager } from './services/voice/voice-manager.js';
 import { logger } from './utils/logger.js';
 const env=loadEnv(),client=createClient(),cache=new TranslationCache(prisma,env),settingsCache=new SettingsCache(prisma),translation=new TranslationManager([new GeminiTranslationProvider(env),new GroqTranslationProvider(env),new GoogleTranslationProvider(env)],cache,env),context={client,db:prisma,env,translation,settingsCache,voiceManager};
 registerEvents(context);
+const port=Number(process.env.PORT)||3000;
+const server=createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/plain'});res.end('Storm Translator is online');});
+server.listen(port,'0.0.0.0',()=>logger.info({port},'Health-check HTTP server listening'));
 async function start(){await withDbRetry(()=>prisma.$connect());logger.info('Database: Neon PostgreSQL connected');await client.login(env.DISCORD_TOKEN);}
-let stopping=false;async function shutdown(signal:string){if(stopping)return;stopping=true;logger.info({signal},'Graceful shutdown');for(const s of voiceManager.getAllSessions())voiceManager.leave(s.guildId);client.destroy();await prisma.$disconnect();process.exit(0);}process.on('SIGINT',()=>void shutdown('SIGINT'));process.on('SIGTERM',()=>void shutdown('SIGTERM'));process.on('unhandledRejection',e=>logger.error({error:e instanceof Error?e.message:String(e)},'Unhandled rejection'));process.on('uncaughtException',e=>logger.fatal({error:e.message},'Uncaught exception'));
+let stopping=false;async function shutdown(signal:string){if(stopping)return;stopping=true;logger.info({signal},'Graceful shutdown');server.close();for(const s of voiceManager.getAllSessions())voiceManager.leave(s.guildId);client.destroy();await prisma.$disconnect();process.exit(0);}process.on('SIGINT',()=>void shutdown('SIGINT'));process.on('SIGTERM',()=>void shutdown('SIGTERM'));process.on('unhandledRejection',e=>logger.error({error:e instanceof Error?e.message:String(e)},'Unhandled rejection'));process.on('uncaughtException',e=>logger.fatal({error:e.message},'Uncaught exception'));
 start().catch(e=>{logger.fatal({error:e instanceof Error?e.message:'unknown'},'Startup failed');process.exitCode=1;});
