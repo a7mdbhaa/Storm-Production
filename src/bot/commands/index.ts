@@ -106,10 +106,15 @@ export async function resolveUserTargetLanguage(userId:string,guildId:string|nul
 
 export async function autocomplete(i:any){const q=i.options.getFocused();await i.respond(searchLanguages(q).map(l=>({name:`${l.name} — ${l.nativeName} (${l.code})`.slice(0,100),value:l.code})));}
 
-export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext){const n=i.commandName,g=i.guildId;const banned=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;if(banned?.banned)throw new Error('You are not permitted to use translation features.');
- if(n==='translate'){const priv=i.options.getBoolean('private')??true;await i.deferReply({ephemeral:priv});const targets=i.options.getString('language',true).split(',').map(parseLang).slice(0,c.env.MAX_TARGET_LANGUAGES),source=i.options.getString('from'),text=i.options.getString('text',true),terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];const result=await c.translation.translateMany({text,...(source?{sourceLanguage:parseLang(source).code}:{}),protectedTerms:terms,targetLanguages:targets.map(x=>x.code),guildId:g??undefined,channelId:i.channelId,userId:i.user.id});if(g){const requests=Object.values(result.providerRequests).reduce((a,n)=>a+n,0);void c.db.translationBatchUsage.create({data:{guildId:g,providerRequests:result.providerRequests,requestedLanguages:targets.length,producedLanguages:result.translations.size,cacheHits:[...result.translations.values()].filter(x=>x.cached).length,fallbackOccurred:result.providerRequests.groq+result.providerRequests.google>0,partialFallback:result.translations.size>0&&requests>1,characters:text.length,totalLatencyMs:result.totalLatencyMs}}).catch(()=>undefined);}const parts=targets.map(target=>`**${target.name}**\n${result.translations.get(target.code)?.translatedText??'Unavailable'}`);return replyChunks(i,parts.join('\n\n'),priv);}
- if(n==='detect'){const d=await c.translation.detect(i.options.getString('text',true)),l=findLanguage(d.language);await i.reply({content:`Detected language: ${l?.name??d.language} (${d.language})${d.confidence!==undefined?` — ${Math.round(d.confidence*100)}% confidence`:''}`,ephemeral:true});return;}
- if(n==='transliterate'){await i.deferReply({ephemeral:true});await i.editReply(await c.translation.transliterate(i.options.getString('text',true),i.options.getString('script',true)));return;}
+async function checkNotBanned(guildId:string|null,userId:string,c:AppContext){
+ if(!guildId)return;
+ const banned=await(c.settingsCache?c.settingsCache.getUserRule(guildId,userId):c.db.userRule.findUnique({where:{guildId_userId:{guildId,userId}}}));
+ if(banned?.banned)throw new Error('You are not permitted to use translation features.');
+}
+export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext){const n=i.commandName,g=i.guildId;
+ if(n==='translate'){const priv=i.options.getBoolean('private')??true;await i.deferReply({ephemeral:priv});await checkNotBanned(g,i.user.id,c);const targets=i.options.getString('language',true).split(',').map(parseLang).slice(0,c.env.MAX_TARGET_LANGUAGES),source=i.options.getString('from'),text=i.options.getString('text',true),terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];const result=await c.translation.translateMany({text,...(source?{sourceLanguage:parseLang(source).code}:{}),protectedTerms:terms,targetLanguages:targets.map(x=>x.code),guildId:g??undefined,channelId:i.channelId,userId:i.user.id});if(g){const requests=Object.values(result.providerRequests).reduce((a,n)=>a+n,0);void c.db.translationBatchUsage.create({data:{guildId:g,providerRequests:result.providerRequests,requestedLanguages:targets.length,producedLanguages:result.translations.size,cacheHits:[...result.translations.values()].filter(x=>x.cached).length,fallbackOccurred:result.providerRequests.groq+result.providerRequests.google>0,partialFallback:result.translations.size>0&&requests>1,characters:text.length,totalLatencyMs:result.totalLatencyMs}}).catch(()=>undefined);}const parts=targets.map(target=>`**${target.name}**\n${result.translations.get(target.code)?.translatedText??'Unavailable'}`);return replyChunks(i,parts.join('\n\n'),priv);}
+ if(n==='detect'){await i.deferReply({ephemeral:true});await checkNotBanned(g,i.user.id,c);const d=await c.translation.detect(i.options.getString('text',true)),l=findLanguage(d.language);await i.editReply({content:`Detected language: ${l?.name??d.language} (${d.language})${d.confidence!==undefined?` — ${Math.round(d.confidence*100)}% confidence`:''}`});return;}
+ if(n==='transliterate'){await i.deferReply({ephemeral:true});await checkNotBanned(g,i.user.id,c);await i.editReply(await c.translation.transliterate(i.options.getString('text',true),i.options.getString('script',true)));return;}
  if(n==='languages'){const q=i.options.getString('search')??'',list=q?searchLanguages(q,100):languages;await i.reply({content:splitMessage(list.map(l=>`${l.name} — ${l.nativeName} — ${l.code}`).join('\n'))[0],ephemeral:true});return;}
  if(n==='channel-link'){const guildId=requireGuild(i),name=i.options.getString('group',true).toLowerCase(),language=parseLang(i.options.getString('language',true)).code;const group=await c.db.translationGroup.upsert({where:{guildId_name:{guildId,name}},create:{guildId,name},update:{}});await c.db.channelSettings.upsert({where:{channelId:i.channelId},create:{guildId,channelId:i.channelId,language,autoLanguages:[],groupId:group.id},update:{language,groupId:group.id}});c.settingsCache?.invalidateAllChannels();return ok(i,`Linked ${channelMention(i.channelId)} to ${name} as ${language}.`);}
  if(n==='channel-unlink'){const guildId=requireGuild(i);const row=await c.db.channelSettings.update({where:{channelId:i.channelId},data:{groupId:null}}).catch(()=>null);if(row?.groupId&&await c.db.channelSettings.count({where:{groupId:row.groupId}})===0)await c.db.translationGroup.delete({where:{id:row.groupId}});c.settingsCache?.invalidateAllChannels();return ok(i,'Channel unlinked.');}
@@ -178,19 +183,20 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
     return i.editReply(`❌ Audio transcription failed: ${err.message||'Unknown error'}`);
    }
   }else if(n==='my-language'){
+   await i.deferReply({ephemeral:true});
    const langOpt=i.options.getString('language');
    if(langOpt){
     const l=parseLang(langOpt);
     await c.db.userRule.upsert({where:{guildId_userId:{guildId:'global',userId:i.user.id}},create:{guildId:'global',userId:i.user.id,autoLanguage:l.code},update:{autoLanguage:l.code}});
-    return i.reply({content:`✅ Your personal translation language has been set to **${l.name}** (\`${l.code}\`).\nAudio transcriptions and translations in private chats and servers will automatically translate to **${l.name}**!`,ephemeral:true});
+    return i.editReply({content:`✅ Your personal translation language has been set to **${l.name}** (\`${l.code}\`).\nAudio transcriptions and translations in private chats and servers will automatically translate to **${l.name}**!`});
    }else{
     const row=await c.db.userRule.findUnique({where:{guildId_userId:{guildId:'global',userId:i.user.id}}}).catch(()=>null);
     const current=row?.autoLanguage?findLanguage(row.autoLanguage):null;
     const discordLang=findLanguage(i.locale);
     if(current){
-     return i.reply({content:`🌐 Your personal translation language is currently set to **${current.name}** (\`${current.code}\`).\nTo change it, use \`/my-language language:<new language>\`.`,ephemeral:true});
+     return i.editReply({content:`🌐 Your personal translation language is currently set to **${current.name}** (\`${current.code}\`).\nTo change it, use \`/my-language language:<new language>\`.`});
     }else{
-     return i.reply({content:`🌐 You haven't set a personal translation language yet (defaulting to Discord language: **${discordLang?.name??'English'}**).\nUse \`/my-language language:<your language>\` to set one!`,ephemeral:true});
+     return i.editReply({content:`🌐 You haven't set a personal translation language yet (defaulting to Discord language: **${discordLang?.name??'English'}**).\nUse \`/my-language language:<your language>\` to set one!`});
     }
    }
   }else if(n==='vc-join'){
@@ -260,11 +266,10 @@ export async function executeCommand(i:ChatInputCommandInteraction,c:AppContext)
 
 export async function executeContextMenu(i:MessageContextMenuCommandInteraction,c:AppContext){
  const g=i.guildId;
- const banned=g?await(c.settingsCache?c.settingsCache.getUserRule(g,i.user.id):c.db.userRule.findUnique({where:{guildId_userId:{guildId:g,userId:i.user.id}}})):null;
- if(banned?.banned)throw new Error('You are not permitted to use translation features.');
 
  if(i.commandName==='Transcribe Audio'){
   await i.deferReply();
+  await checkNotBanned(g,i.user.id,c);
   const audioAttachment=i.targetMessage.attachments.find(a=>a.contentType?.startsWith('audio/')||/\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(a.name));
   if(!audioAttachment)return i.editReply('❌ That message does not have an audio file or voice message attached.');
   try{
@@ -296,6 +301,7 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
 
  if(i.commandName==='Translate Message'){
   await i.deferReply({flags:MessageFlags.Ephemeral});
+  await checkNotBanned(g,i.user.id,c);
   const targetLang=await resolveUserTargetLanguage(i.user.id,g,i.locale,c);
   const terms=g?await(c.settingsCache?c.settingsCache.getIgnoreTerms(g):(await c.db.ignoreTerm.findMany({where:{guildId:g}})).map(x=>x.term)):[];
   const result=await c.translation.translateMany({text,targetLanguages:[targetLang.code],protectedTerms:terms,guildId:g??undefined,channelId:i.channelId,userId:i.user.id});
@@ -307,6 +313,7 @@ export async function executeContextMenu(i:MessageContextMenuCommandInteraction,
  }
  if(i.commandName==='Detect Language'){
   await i.deferReply({flags:MessageFlags.Ephemeral});
+  await checkNotBanned(g,i.user.id,c);
   const d=await c.translation.detect(text);
   const l=findLanguage(d.language);
   return i.editReply({content:`🔍 **Detected Language:** ${l?.name??d.language} (${d.language})${d.confidence!==undefined?` — ${Math.round(d.confidence*100)}% confidence`:''}`});

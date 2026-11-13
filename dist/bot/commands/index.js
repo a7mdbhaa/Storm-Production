@@ -115,14 +115,19 @@ export async function resolveUserTargetLanguage(userId, guildId, locale, c) {
     return { code: 'en', name: 'English', nativeName: 'English', aliases: ['en', 'english'], flags: ['🇬🇧'] };
 }
 export async function autocomplete(i) { const q = i.options.getFocused(); await i.respond(searchLanguages(q).map(l => ({ name: `${l.name} — ${l.nativeName} (${l.code})`.slice(0, 100), value: l.code }))); }
-export async function executeCommand(i, c) {
-    const n = i.commandName, g = i.guildId;
-    const banned = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
+async function checkNotBanned(guildId, userId, c) {
+    if (!guildId)
+        return;
+    const banned = await (c.settingsCache ? c.settingsCache.getUserRule(guildId, userId) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId, userId } } }));
     if (banned?.banned)
         throw new Error('You are not permitted to use translation features.');
+}
+export async function executeCommand(i, c) {
+    const n = i.commandName, g = i.guildId;
     if (n === 'translate') {
         const priv = i.options.getBoolean('private') ?? true;
         await i.deferReply({ ephemeral: priv });
+        await checkNotBanned(g, i.user.id, c);
         const targets = i.options.getString('language', true).split(',').map(parseLang).slice(0, c.env.MAX_TARGET_LANGUAGES), source = i.options.getString('from'), text = i.options.getString('text', true), terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
         const result = await c.translation.translateMany({ text, ...(source ? { sourceLanguage: parseLang(source).code } : {}), protectedTerms: terms, targetLanguages: targets.map(x => x.code), guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
         if (g) {
@@ -133,12 +138,15 @@ export async function executeCommand(i, c) {
         return replyChunks(i, parts.join('\n\n'), priv);
     }
     if (n === 'detect') {
+        await i.deferReply({ ephemeral: true });
+        await checkNotBanned(g, i.user.id, c);
         const d = await c.translation.detect(i.options.getString('text', true)), l = findLanguage(d.language);
-        await i.reply({ content: `Detected language: ${l?.name ?? d.language} (${d.language})${d.confidence !== undefined ? ` — ${Math.round(d.confidence * 100)}% confidence` : ''}`, ephemeral: true });
+        await i.editReply({ content: `Detected language: ${l?.name ?? d.language} (${d.language})${d.confidence !== undefined ? ` — ${Math.round(d.confidence * 100)}% confidence` : ''}` });
         return;
     }
     if (n === 'transliterate') {
         await i.deferReply({ ephemeral: true });
+        await checkNotBanned(g, i.user.id, c);
         await i.editReply(await c.translation.transliterate(i.options.getString('text', true), i.options.getString('script', true)));
         return;
     }
@@ -363,21 +371,22 @@ export async function executeCommand(i, c) {
         }
     }
     else if (n === 'my-language') {
+        await i.deferReply({ ephemeral: true });
         const langOpt = i.options.getString('language');
         if (langOpt) {
             const l = parseLang(langOpt);
             await c.db.userRule.upsert({ where: { guildId_userId: { guildId: 'global', userId: i.user.id } }, create: { guildId: 'global', userId: i.user.id, autoLanguage: l.code }, update: { autoLanguage: l.code } });
-            return i.reply({ content: `✅ Your personal translation language has been set to **${l.name}** (\`${l.code}\`).\nAudio transcriptions and translations in private chats and servers will automatically translate to **${l.name}**!`, ephemeral: true });
+            return i.editReply({ content: `✅ Your personal translation language has been set to **${l.name}** (\`${l.code}\`).\nAudio transcriptions and translations in private chats and servers will automatically translate to **${l.name}**!` });
         }
         else {
             const row = await c.db.userRule.findUnique({ where: { guildId_userId: { guildId: 'global', userId: i.user.id } } }).catch(() => null);
             const current = row?.autoLanguage ? findLanguage(row.autoLanguage) : null;
             const discordLang = findLanguage(i.locale);
             if (current) {
-                return i.reply({ content: `🌐 Your personal translation language is currently set to **${current.name}** (\`${current.code}\`).\nTo change it, use \`/my-language language:<new language>\`.`, ephemeral: true });
+                return i.editReply({ content: `🌐 Your personal translation language is currently set to **${current.name}** (\`${current.code}\`).\nTo change it, use \`/my-language language:<new language>\`.` });
             }
             else {
-                return i.reply({ content: `🌐 You haven't set a personal translation language yet (defaulting to Discord language: **${discordLang?.name ?? 'English'}**).\nUse \`/my-language language:<your language>\` to set one!`, ephemeral: true });
+                return i.editReply({ content: `🌐 You haven't set a personal translation language yet (defaulting to Discord language: **${discordLang?.name ?? 'English'}**).\nUse \`/my-language language:<your language>\` to set one!` });
             }
         }
     }
@@ -442,11 +451,9 @@ export async function executeCommand(i, c) {
 }
 export async function executeContextMenu(i, c) {
     const g = i.guildId;
-    const banned = g ? await (c.settingsCache ? c.settingsCache.getUserRule(g, i.user.id) : c.db.userRule.findUnique({ where: { guildId_userId: { guildId: g, userId: i.user.id } } })) : null;
-    if (banned?.banned)
-        throw new Error('You are not permitted to use translation features.');
     if (i.commandName === 'Transcribe Audio') {
         await i.deferReply();
+        await checkNotBanned(g, i.user.id, c);
         const audioAttachment = i.targetMessage.attachments.find(a => a.contentType?.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac|flac|webm|opus)$/i.test(a.name));
         if (!audioAttachment)
             return i.editReply('❌ That message does not have an audio file or voice message attached.');
@@ -480,6 +487,7 @@ export async function executeContextMenu(i, c) {
         return i.reply({ content: 'That message does not contain any text to translate.', flags: MessageFlags.Ephemeral });
     if (i.commandName === 'Translate Message') {
         await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await checkNotBanned(g, i.user.id, c);
         const targetLang = await resolveUserTargetLanguage(i.user.id, g, i.locale, c);
         const terms = g ? await (c.settingsCache ? c.settingsCache.getIgnoreTerms(g) : (await c.db.ignoreTerm.findMany({ where: { guildId: g } })).map(x => x.term)) : [];
         const result = await c.translation.translateMany({ text, targetLanguages: [targetLang.code], protectedTerms: terms, guildId: g ?? undefined, channelId: i.channelId, userId: i.user.id });
@@ -492,6 +500,7 @@ export async function executeContextMenu(i, c) {
     }
     if (i.commandName === 'Detect Language') {
         await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await checkNotBanned(g, i.user.id, c);
         const d = await c.translation.detect(text);
         const l = findLanguage(d.language);
         return i.editReply({ content: `🔍 **Detected Language:** ${l?.name ?? d.language} (${d.language})${d.confidence !== undefined ? ` — ${Math.round(d.confidence * 100)}% confidence` : ''}` });

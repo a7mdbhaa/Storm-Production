@@ -16,6 +16,12 @@ registerEvents(context);
 const port=Number(process.env.PORT)||3000;
 const server=createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'text/plain'});res.end('Storm Translator is online');});
 server.listen(port,'0.0.0.0',()=>logger.info({port},'Health-check HTTP server listening'));
+const keepAliveInterval=setInterval(()=>{
+ void prisma.$queryRaw`SELECT 1`.catch(()=>undefined);
+ const externalUrl=process.env.RENDER_EXTERNAL_URL;
+ if(externalUrl)void fetch(externalUrl).catch(()=>undefined);
+},4*60*1000);
+keepAliveInterval.unref();
 async function start(){await withDbRetry(()=>prisma.$connect());logger.info('Database: Neon PostgreSQL connected');await client.login(env.DISCORD_TOKEN);}
-let stopping=false;async function shutdown(signal:string){if(stopping)return;stopping=true;logger.info({signal},'Graceful shutdown');server.close();for(const s of voiceManager.getAllSessions())voiceManager.leave(s.guildId);client.destroy();await prisma.$disconnect();process.exit(0);}process.on('SIGINT',()=>void shutdown('SIGINT'));process.on('SIGTERM',()=>void shutdown('SIGTERM'));process.on('unhandledRejection',e=>logger.error({error:e instanceof Error?e.message:String(e)},'Unhandled rejection'));process.on('uncaughtException',e=>logger.fatal({error:e.message},'Uncaught exception'));
+let stopping=false;async function shutdown(signal:string){if(stopping)return;stopping=true;logger.info({signal},'Graceful shutdown');clearInterval(keepAliveInterval);server.close();for(const s of voiceManager.getAllSessions())voiceManager.leave(s.guildId);client.destroy();await prisma.$disconnect();process.exit(0);}process.on('SIGINT',()=>void shutdown('SIGINT'));process.on('SIGTERM',()=>void shutdown('SIGTERM'));process.on('unhandledRejection',e=>logger.error({error:e instanceof Error?e.message:String(e)},'Unhandled rejection'));process.on('uncaughtException',e=>logger.fatal({error:e.message},'Uncaught exception'));
 start().catch(e=>{logger.fatal({error:e instanceof Error?e.message:'unknown'},'Startup failed');process.exitCode=1;});
